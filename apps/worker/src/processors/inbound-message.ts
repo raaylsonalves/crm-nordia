@@ -6,30 +6,32 @@ import {
   montarTransferencia,
   shouldOpenNewConversation,
   type ConversationState,
-  type InboundMessage,
+  type InboundMessageJob,
 } from "@crm/core";
 import { prisma } from "@crm/db";
-import type { FastifyBaseLogger } from "fastify";
+import type { Job } from "bullmq";
+import type { Logger } from "pino";
 import { env } from "../env.js";
-import { waha } from "../integrations/waha.js";
 import { chaveDeMidia, storage } from "../integrations/storage.js";
-import { publicar } from "../realtime/bus.js";
+import { waha } from "../integrations/waha.js";
+import { publicar } from "../realtime.js";
 
 /**
- * Pipeline de entrada de mensagem.
+ * Pipeline de entrada de mensagem — movido da API para o worker.
  *
- * NOTA DE ARQUITETURA: o plano prevê este processamento em worker BullMQ.
- * Por ora roda no processo da API, logo após o webhook responder — o suficiente
- * para testar ponta a ponta. A função já está isolada para o worker chamá-la
- * sem alteração quando a fila entrar (Etapa 4).
+ * Rodar aqui, e não no processo HTTP, é o que garante que uma mensagem
+ * sobreviva a um restart da API no meio do caminho: o job fica na fila do
+ * Redis até ser processado com sucesso, com retentativa automática em caso
+ * de falha (rede, WAHA fora do ar, banco temporariamente indisponível).
  */
-export async function processarMensagemRecebida(
-  msg: InboundMessage,
-  log: FastifyBaseLogger,
-): Promise<void> {
+export async function processarMensagemRecebida(job: Job<InboundMessageJob>, log: Logger): Promise<void> {
+  const { message: msg, webhookEventId } = job.data;
+
   const org = await prisma.organization.findFirst({ where: { slug: "rise" } });
   if (!org) {
+    // Não é um erro transitório — retentar não resolve. Registra e não relança.
     log.error("organização não encontrada — rode o seed");
+    await marcarProcessado(webhookEventId, "organização 'rise' não encontrada");
     return;
   }
 
@@ -45,8 +47,7 @@ export async function processarMensagemRecebida(
   // O WhatsApp pode entregar um LID (identificador interno, ex.: 31886072111283@lid)
   // em vez do número. Nesse caso o telefone fica nulo: derivar um número do LID
   // produziria um telefone que não existe.
-  const ehLid = msg.chatId.endsWith("@lid");
-  const telefone = ehLid ? null : msg.chatId.replace(/@.*$/, "");
+  const telefone = msg.chatId.endsWith("@lid") ? null : msg.chatId.replace(/@.*$/, "");
   const pushName = msg.pushName?.trim();
 
   const existente = await prisma.contact.findUnique({
@@ -61,10 +62,7 @@ export async function processarMensagemRecebida(
   const contato = existente
     ? await prisma.contact.update({
         where: { id: existente.id },
-        data: {
-          lastContactAt: agora,
-          ...(pushName && nomeProvisorio ? { name: pushName } : {}),
-        },
+        data: { lastContactAt: agora, ...(pushName && nomeProvisorio ? { name: pushName } : {}) },
       })
     : await prisma.contact.create({
         data: {
@@ -92,9 +90,7 @@ export async function processarMensagemRecebida(
       inactivityWindowMinutes: janela,
     });
 
-  const filaPadrao = await prisma.queue.findFirst({
-    where: { organizationId: org.id, isDefault: true },
-  });
+  const filaPadrao = await prisma.queue.findFirst({ where: { organizationId: org.id, isDefault: true } });
 
   const conversa = precisaNova
     ? await prisma.conversation.create({
@@ -128,13 +124,15 @@ export async function processarMensagemRecebida(
       log.info({ chave: chaveMidia, bytes: conteudo.length }, "mídia guardada");
     } catch (error) {
       // A mensagem entra no histórico mesmo assim: perder a mídia é ruim,
-      // perder o registro de que o cliente mandou algo é pior.
+      // perder o registro de que o cliente mandou algo é pior. Não relança —
+      // isso não é um motivo para o BullMQ retentar a mensagem inteira.
       log.error({ err: error, externalId: msg.externalId }, "falha ao guardar mídia recebida");
     }
   }
 
   // 4. Mensagem no histórico. A unique (organizationId, externalId) é a rede de
-  // segurança final contra reentrega do mesmo evento.
+  // segurança final contra reentrega do mesmo evento — inclusive contra dois
+  // workers pegando o mesmo job por engano.
   try {
     await prisma.message.create({
       data: {
@@ -145,7 +143,6 @@ export async function processarMensagemRecebida(
         authorType: "CLIENTE",
         type: msg.type,
         body: msg.body ?? null,
-        // Guarda a CHAVE no nosso storage, não a URL da WAHA (que expira).
         mediaUrl: chaveMidia,
         mediaMimeType: msg.mediaMimeType ?? null,
         caption: msg.caption ?? null,
@@ -157,6 +154,7 @@ export async function processarMensagemRecebida(
   } catch (error) {
     if ((error as { code?: string }).code === "P2002") {
       log.info({ externalId: msg.externalId }, "mensagem já registrada — ignorando");
+      await marcarProcessado(webhookEventId);
       return;
     }
     throw error;
@@ -167,27 +165,26 @@ export async function processarMensagemRecebida(
     data: { lastMessageAt: agora, unreadCount: { increment: 1 } },
   });
 
-  // A inbox de quem está com a tela aberta atualiza sem recarregar.
-  publicar({
+  await publicar({
     tipo: "message.created",
     conversationId: conversa.id,
     dados: { quem: "CLIENTE", texto: msg.body ?? "", contato: contato.name, protocolo: conversa.protocol },
   });
 
-  // 4. Quem responde agora? Ponto único de decisão.
+  // 5. Quem responde agora? Ponto único de decisão.
   const estado = conversa.state as ConversationState;
   const decisao = canRespond("BOT", estado);
   if (!decisao.allowed) {
     log.info({ conversationId: conversa.id, estado, motivo: decisao.reason }, "automação pausada");
+    await marcarProcessado(webhookEventId);
     return;
   }
 
-  // 5. Fluxo do bot.
+  // 6. Fluxo do bot.
   if (!conversa.welcomeSentAt) {
     // Marca ANTES de enviar, condicionado a ainda estar nulo. Duas mensagens
-    // que chegam no mesmo instante disputam esta linha: só uma atualiza, e só
-    // ela envia o menu. Ler-depois-escrever deixava as duas passarem, e o
-    // cliente recebia o menu em duplicidade.
+    // que chegam quase juntas (dois jobs, possivelmente dois workers)
+    // disputam esta linha: só uma atualiza, e só ela envia o menu.
     const ganhou = await prisma.conversation.updateMany({
       where: { id: conversa.id, welcomeSentAt: null },
       data: { welcomeSentAt: new Date(), funnelStage: "TRIAGEM_AUTOMATICA" },
@@ -195,10 +192,12 @@ export async function processarMensagemRecebida(
 
     if (ganhou.count === 0) {
       log.info({ conversationId: conversa.id }, "menu já enviado por outra mensagem simultânea");
+      await marcarProcessado(webhookEventId);
       return;
     }
 
     await enviar(org.id, conversa.id, msg.chatId, montarMenu({ nomeCliente: primeiroNome(contato.name), nomeLoja }), log);
+    await marcarProcessado(webhookEventId);
     return;
   }
 
@@ -207,14 +206,15 @@ export async function processarMensagemRecebida(
 
   if (intencao === "humano") {
     await transferirParaHumano(org.id, conversa.id, conversa.protocol, msg.chatId, log);
+    await marcarProcessado(webhookEventId);
     return;
   }
 
   if (intencao === "desconhecida") {
-    // Duas falhas seguidas de interpretação → transfere, conforme o fluxo.
     const falhas = conversa.intentFailures + 1;
     if (falhas >= 2) {
       await transferirParaHumano(org.id, conversa.id, conversa.protocol, msg.chatId, log, "falha_intencao");
+      await marcarProcessado(webhookEventId);
       return;
     }
     await prisma.conversation.update({ where: { id: conversa.id }, data: { intentFailures: falhas } });
@@ -225,10 +225,10 @@ export async function processarMensagemRecebida(
       "Não entendi a opção. Digite o número de 1 a 5, por favor. Se preferir falar com uma pessoa, digite 5.",
       log,
     );
+    await marcarProcessado(webhookEventId);
     return;
   }
 
-  // Opção válida: zera o contador de falhas.
   await prisma.conversation.update({
     where: { id: conversa.id },
     data: { intentFailures: 0, lastIntent: intencao },
@@ -236,8 +236,6 @@ export async function processarMensagemRecebida(
 
   // Opções 1 a 4 exigem a IA, que ainda não está implementada (Etapa 8).
   // Enquanto isso, o caminho honesto é a fila humana — não uma resposta fingida.
-  // O aviso abaixo evita que o cliente ache que caiu num buraco: ele escolheu
-  // "quero comprar" e recebeu uma transferência sem explicação.
   const rotulo: Record<string, string> = {
     compra: "sobre uma compra",
     tamanho: "sobre tamanho",
@@ -252,10 +250,18 @@ export async function processarMensagemRecebida(
     log,
   );
   await transferirParaHumano(org.id, conversa.id, conversa.protocol, msg.chatId, log, `menu_${intencao}`);
+  await marcarProcessado(webhookEventId);
 }
 
 function primeiroNome(nome: string): string {
   return nome.split(" ")[0] ?? nome;
+}
+
+async function marcarProcessado(webhookEventId: string, erro?: string): Promise<void> {
+  await prisma.webhookEvent.update({
+    where: { id: webhookEventId },
+    data: { processedAt: new Date(), ...(erro ? { error: erro } : {}) },
+  });
 }
 
 /** Envia pela WAHA e registra no histórico com o id devolvido pelo gateway. */
@@ -264,7 +270,7 @@ async function enviar(
   conversationId: string,
   chatId: string,
   texto: string,
-  log: FastifyBaseLogger,
+  log: Logger,
 ): Promise<void> {
   try {
     const resultado = await waha.sendText({ chatId, text: texto });
@@ -305,7 +311,7 @@ async function transferirParaHumano(
   conversationId: string,
   protocolo: string,
   chatId: string,
-  log: FastifyBaseLogger,
+  log: Logger,
   motivo = "pedido_cliente",
 ): Promise<void> {
   await enviar(organizationId, conversationId, chatId, montarTransferencia(protocolo), log);
@@ -336,6 +342,8 @@ async function transferirParaHumano(
       reason: motivo,
     },
   });
+
+  await publicar({ tipo: "conversation.updated", conversationId, dados: { estado: "AGUARDANDO_ATENDENTE" } });
 
   log.info({ conversationId, motivo }, "conversa transferida para a fila humana");
 }

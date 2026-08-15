@@ -1,24 +1,16 @@
+import { CANAL_REALTIME, type Evento } from "@crm/core";
 import type { FastifyReply } from "fastify";
+import { redis } from "../redis.js";
 
 /**
  * Barramento de eventos em tempo real (SSE).
  *
- * Em memória, como as sessões: serve uma instância da API. Ao escalar, o
- * `publicar` passa a escrever num canal Redis e cada instância reemite para
- * seus próprios inscritos — o resto do código não muda.
+ * A entrega ao navegador é local ao processo (Map de conexões abertas), mas a
+ * publicação passa pelo Redis: é assim que o worker — rodando num processo
+ * separado, sem nenhuma conexão SSE — consegue fazer uma mensagem aparecer na
+ * tela do atendente. Também deixa o desenho pronto para mais de uma instância
+ * da API no futuro, sem trocar nada aqui.
  */
-
-export type EventoTipo =
-  | "message.created"
-  | "message.status"
-  | "conversation.updated"
-  | "conversation.assigned";
-
-export interface Evento {
-  tipo: EventoTipo;
-  conversationId: string;
-  dados: unknown;
-}
 
 interface Inscrito {
   id: string;
@@ -42,15 +34,7 @@ export function totalInscritos(): number {
   return inscritos.size;
 }
 
-/**
- * Envia o evento a todos os conectados.
- *
- * Sem filtro por fila ainda: com um atendente, todo mundo que está logado
- * precisa ver tudo. Quando houver equipe, filtrar aqui por participação na
- * fila da conversa — o atendente não deve receber evento de conversa que não
- * pode abrir.
- */
-export function publicar(evento: Evento): void {
+function entregarLocal(evento: Evento): void {
   const payload = `event: ${evento.tipo}\ndata: ${JSON.stringify(evento)}\n\n`;
   for (const inscrito of inscritos.values()) {
     try {
@@ -61,4 +45,32 @@ export function publicar(evento: Evento): void {
       inscritos.delete(inscrito.id);
     }
   }
+}
+
+// Conexão dedicada: um cliente Redis em modo subscribe não pode executar
+// outros comandos, então não pode ser a mesma instância usada pelas sessões.
+const assinante = redis.duplicate();
+let assinado = false;
+
+export async function iniciarBarramento(): Promise<void> {
+  if (assinado) return;
+  assinado = true;
+  await assinante.subscribe(CANAL_REALTIME);
+  assinante.on("message", (_canal, mensagem) => {
+    try {
+      entregarLocal(JSON.parse(mensagem) as Evento);
+    } catch {
+      // Mensagem malformada no canal não pode derrubar o processo.
+    }
+  });
+}
+
+export async function pararBarramento(): Promise<void> {
+  if (!assinado) return;
+  await assinante.quit();
+}
+
+/** Publica no canal Redis; a entrega ao navegador acontece em entregarLocal. */
+export async function publicar(evento: Evento): Promise<void> {
+  await redis.publish(CANAL_REALTIME, JSON.stringify(evento));
 }

@@ -6,6 +6,8 @@ import Fastify from "fastify";
 import { env } from "./env.js";
 import { setOrgIdForLogs, waha } from "./integrations/waha.js";
 import { carregarSessao } from "./plugins/auth.js";
+import { fecharFilas } from "./queues.js";
+import { iniciarBarramento, pararBarramento } from "./realtime/bus.js";
 import { redis, redisSaudavel } from "./redis.js";
 import { authRoutes } from "./routes/auth.js";
 import { conversationRoutes } from "./routes/conversations.js";
@@ -89,6 +91,10 @@ if (env.NODE_ENV !== "production") {
   app.log.warn("rotas /api/v1/dev ativas SEM autenticação (apenas fora de produção)");
 }
 
+// Assina o canal de eventos antes de aceitar conexões: sem isso, um evento
+// publicado entre o listen() e a assinatura se perderia.
+await iniciarBarramento();
+
 const org = await prisma.organization.findFirst({ where: { slug: "rise" }, select: { id: true } });
 if (org) setOrgIdForLogs(org.id);
 else app.log.error("organização 'rise' não encontrada — rode pnpm db:seed");
@@ -100,6 +106,8 @@ for (const sinal of ["SIGINT", "SIGTERM"] as const) {
   process.on(sinal, () => {
     void app
       .close()
+      .then(() => pararBarramento())
+      .then(() => fecharFilas())
       .then(() => prisma.$disconnect())
       .then(() => redis.quit())
       .then(() => process.exit(0));

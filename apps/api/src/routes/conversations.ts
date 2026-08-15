@@ -207,7 +207,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
         },
       });
 
-      publicar({ tipo: "message.created", conversationId: id, dados: { id: mensagem.id, quem: "ATENDENTE", texto: corpo.data.texto } });
+      await publicar({ tipo: "message.created", conversationId: id, dados: { id: mensagem.id, quem: "ATENDENTE", texto: corpo.data.texto } });
       return reply.send({ id: mensagem.id, status: "ENVIADO" });
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -335,7 +335,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       });
 
       await prisma.conversation.update({ where: { id }, data: { lastMessageAt: new Date() } });
-      publicar({ tipo: "message.created", conversationId: id, dados: { id: mensagem.id, quem: "ATENDENTE" } });
+      await publicar({ tipo: "message.created", conversationId: id, dados: { id: mensagem.id, quem: "ATENDENTE" } });
       return reply.send({ id: mensagem.id, tipo, status: "ENVIADO" });
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -450,7 +450,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
-    publicar({ tipo: "conversation.assigned", conversationId: id, dados: { responsavel: usuario.name } });
+    await publicar({ tipo: "conversation.assigned", conversationId: id, dados: { responsavel: usuario.name } });
     return reply.send({ estado: conversa.state, responsavel: usuario.name });
   });
 
@@ -486,7 +486,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       },
     });
 
-    publicar({ tipo: "conversation.updated", conversationId: id, dados: { estado: conversa.state } });
+    await publicar({ tipo: "conversation.updated", conversationId: id, dados: { estado: conversa.state } });
     return reply.send({ estado: conversa.state });
   });
 
@@ -494,7 +494,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     const { id } = idParam.parse(request.params);
     await prisma.conversation.update({ where: { id }, data: { state: "AGUARDANDO_CLIENTE" } });
     await registrarEvento(id, "state_changed", "AGUARDANDO_CLIENTE", request.usuario!.id, "aguardando resposta do cliente");
-    publicar({ tipo: "conversation.updated", conversationId: id, dados: { estado: "AGUARDANDO_CLIENTE" } });
+    await publicar({ tipo: "conversation.updated", conversationId: id, dados: { estado: "AGUARDANDO_CLIENTE" } });
     return reply.send({ estado: "AGUARDANDO_CLIENTE" });
   });
 
@@ -505,7 +505,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       data: { state: "BOT", assigneeId: null, funnelStage: "TRIAGEM_AUTOMATICA" },
     });
     await registrarEvento(id, "state_changed", "BOT", request.usuario!.id, "devolvida para a automação");
-    publicar({ tipo: "conversation.updated", conversationId: id, dados: { estado: "BOT" } });
+    await publicar({ tipo: "conversation.updated", conversationId: id, dados: { estado: "BOT" } });
     return reply.send({ estado: "BOT" });
   });
 
@@ -517,7 +517,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       data: { state: "FINALIZADO", funnelStage: "FINALIZADO", closedAt: new Date(), closeReason: corpo.motivo, unreadCount: 0 },
     });
     await registrarEvento(id, "closed", "FINALIZADO", request.usuario!.id, corpo.motivo);
-    publicar({ tipo: "conversation.updated", conversationId: id, dados: { estado: "FINALIZADO" } });
+    await publicar({ tipo: "conversation.updated", conversationId: id, dados: { estado: "FINALIZADO" } });
     return reply.send({ estado: "FINALIZADO" });
   });
 

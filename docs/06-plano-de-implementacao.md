@@ -2,6 +2,18 @@
 
 Doze etapas até o MVP completo. Cada uma termina com algo verificável — não com “parte pronta”. Estimativas assumem uma pessoa em tempo integral; some folga se houver revisão.
 
+## Status real (atualizado durante a implementação)
+
+A ordem de execução divergiu do plano original — a loja é a RISE, não a Ateliê Marés fictícia, e a prioridade foi ter algo testável com o WhatsApp real o quanto antes. O que está de pé, verificado rodando (não só codificado):
+
+- **Fundação**: monorepo, `docker-compose` com Postgres+pgvector, Redis, MinIO e WAHA. Seed com o conteúdo real do site da RISE na base de conhecimento.
+- **Autenticação**: login com sessão em Redis (sobrevive a restart da API), RBAC por perfil.
+- **WhatsApp real**: sessão WAHA pareada e conectada, webhook validando idempotência.
+- **Inbox funcional**: três colunas, tempo real por SSE, mídia (foto e áudio) recebida e enviada, arquivada em storage próprio, transferência entre setores, notificação de mensagem nova.
+- **Worker BullMQ**: todo o processamento de mensagem recebida saiu do processo da API e roda em `apps/worker`, com fila no Redis. Testado derrubando o worker no meio do fluxo — a mensagem fica na fila e é processada assim que ele volta, sem se perder.
+
+Ainda não implementado: IA (Etapa 8), Kanban visual (Etapa 10), dashboard (Etapa 11), telas de administração, HMAC no webhook, rate limiting, testes automatizados.
+
 ## Etapa 0 — Fundação (2–3 dias)
 Monorepo pnpm + Turborepo, TypeScript estrito, ESLint com regra de dependência entre camadas, Prettier. `docker-compose.yml` com Postgres 16 + pgvector, Redis 7, MinIO e WAHA. Prisma com o schema já modelado, migration inicial (`CREATE EXTENSION vector, pg_trgm`) e seed com dados fictícios brasileiros realistas: loja **Ateliê Marés**, 8 usuários, 3 filas, ~60 produtos com variações de tamanho e cor, 40 contatos, 120 pedidos, conversas em todos os estados.
 **Pronto quando:** `docker compose up` sobe tudo e `pnpm db:seed` popula o banco.

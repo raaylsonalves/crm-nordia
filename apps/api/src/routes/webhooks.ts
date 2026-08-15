@@ -1,9 +1,18 @@
 import { eventId, parseAck, parseInboundMessage, verifySignature, type WahaWebhookBody } from "@crm/adapters";
+import { RETRY_PADRAO } from "@crm/core";
 import { prisma } from "@crm/db";
 import type { FastifyInstance } from "fastify";
 import { env } from "../env.js";
-import { processarMensagemRecebida } from "../services/inbound.js";
+import { ackUpdateQueue, inboundMessageQueue } from "../queues.js";
 
+/**
+ * Webhook da WAHA.
+ *
+ * A responsabilidade daqui é só: autenticar, checar idempotência e enfileirar.
+ * Nenhum envio, download de mídia ou lógica de bot roda neste handler — isso
+ * é trabalho do worker, e é isso que garante que uma mensagem sobreviva a um
+ * restart da API no meio do processamento.
+ */
 export async function webhookRoutes(app: FastifyInstance): Promise<void> {
   app.post("/webhooks/waha", async (request, reply) => {
     const body = request.body as WahaWebhookBody;
@@ -37,14 +46,17 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(200).send({ status: "ignorado", motivo: "fromMe" });
     }
 
-    // 3. Idempotência ANTES de qualquer efeito colateral.
+    // 3. Idempotência ANTES de qualquer efeito colateral — inclusive antes de
+    // enfileirar. O unique (provider, externalId) é o que garante que uma
+    // reentrega da WAHA nunca vira dois jobs.
     const externalId = eventId(body);
     if (!externalId) {
       return reply.code(200).send({ status: "ignorado", motivo: "evento sem identificador" });
     }
 
+    let webhookEventId: string;
     try {
-      await prisma.webhookEvent.create({
+      const evento = await prisma.webhookEvent.create({
         data: {
           provider: "WAHA",
           externalId,
@@ -53,6 +65,7 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
           payload: body as object,
         },
       });
+      webhookEventId = evento.id;
     } catch (error) {
       if ((error as { code?: string }).code === "P2002") {
         request.log.info({ externalId }, "evento já processado");
@@ -61,39 +74,29 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
       throw error;
     }
 
-    // 4. Resposta imediata; o processamento segue depois.
-    void reply.code(200).send({ status: "recebido" });
-
-    // 5. Processamento.
-    try {
-      if (inbound) {
-        await processarMensagemRecebida(inbound, request.log);
+    // 4. Enfileira o trabalho de verdade. jobId = externalId: mesmo que este
+    // handler rodasse duas vezes por algum motivo, o BullMQ não duplicaria o job.
+    if (inbound) {
+      await inboundMessageQueue.add(
+        "processar",
+        { webhookEventId, message: inbound },
+        { ...RETRY_PADRAO, jobId: externalId },
+      );
+    } else {
+      const ack = parseAck(body);
+      if (ack) {
+        await ackUpdateQueue.add(
+          "processar",
+          { webhookEventId, ack },
+          { ...RETRY_PADRAO, jobId: externalId },
+        );
       } else {
-        const ack = parseAck(body);
-        if (ack) {
-          await prisma.message.updateMany({
-            where: { externalId: ack.externalId },
-            data: {
-              status: ack.status,
-              ...(ack.status === "ENTREGUE" ? { deliveredAt: ack.timestamp } : {}),
-              ...(ack.status === "LIDO" ? { readAt: ack.timestamp } : {}),
-            },
-          });
-        }
+        // Evento reconhecido (ex.: session.status) mas sem processamento
+        // definido ainda. Marca como tratado para não poluir a fila de erros.
+        await prisma.webhookEvent.update({ where: { id: webhookEventId }, data: { processedAt: new Date() } });
       }
-      await prisma.webhookEvent.update({
-        where: { provider_externalId: { provider: "WAHA", externalId } },
-        data: { processedAt: new Date() },
-      });
-    } catch (error) {
-      const mensagem = error instanceof Error ? error.message : String(error);
-      request.log.error({ err: error, externalId }, "falha ao processar webhook");
-      await prisma.webhookEvent.update({
-        where: { provider_externalId: { provider: "WAHA", externalId } },
-        data: { error: mensagem.slice(0, 1000) },
-      });
     }
 
-    return reply;
+    return reply.code(200).send({ status: "recebido" });
   });
 }
