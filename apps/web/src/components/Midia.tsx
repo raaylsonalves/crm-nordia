@@ -9,7 +9,13 @@ import { API_URL, type Mensagem } from "@/lib/api";
  * API, que não pode chegar ao navegador. O back-end busca com a credencial e
  * devolve o conteúdo.
  */
-export function Midia({ mensagem }: { mensagem: Mensagem }) {
+export function Midia({
+  mensagem,
+  onAbrirImagem,
+}: {
+  mensagem: Mensagem;
+  onAbrirImagem?: (src: string, descricao: string) => void;
+}) {
   const src = `${API_URL}/messages/${mensagem.id}/media`;
 
   // Mídia não arquivada (mensagem anterior ao arquivamento, ou falha ao
@@ -31,16 +37,17 @@ export function Midia({ mensagem }: { mensagem: Mensagem }) {
   }
 
   if (mensagem.tipo === "IMAGE") {
+    const descricao = mensagem.texto ?? "Imagem enviada na conversa";
     return (
-      <a href={src} target="_blank" rel="noopener noreferrer" className="block">
+      <button
+        type="button"
+        onClick={() => onAbrirImagem?.(src, descricao)}
+        aria-label="Abrir imagem em tamanho maior"
+        className="block cursor-zoom-in"
+      >
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={src}
-          alt={mensagem.texto ?? "Imagem enviada na conversa"}
-          className="max-h-72 w-auto rounded-lg"
-          loading="lazy"
-        />
-      </a>
+        <img src={src} alt={descricao} className="max-h-72 w-auto rounded-lg" loading="lazy" />
+      </button>
     );
   }
 

@@ -6,6 +6,7 @@ import { EstadoBadge, EstadoVazio, Skeleton } from "@/components/Badges";
 import { Confirmar } from "@/components/Confirmar";
 import { Midia } from "@/components/Midia";
 import { Transferir } from "@/components/Transferir";
+import { VisualizadorImagem } from "@/components/VisualizadorImagem";
 import { useNotificacoes } from "@/lib/notificacoes";
 import {
   API_URL,
@@ -52,6 +53,7 @@ export default function InboxPage() {
   const [aviso, setAviso] = useState<string | null>(null);
   const [confirmando, setConfirmando] = useState<"close" | "return-to-bot" | null>(null);
   const [transferindo, setTransferindo] = useState(false);
+  const [imagemAberta, setImagemAberta] = useState<{ src: string; descricao: string } | null>(null);
   const arquivoRef = useRef<HTMLInputElement>(null);
   const { avisar, marcarTitulo } = useNotificacoes();
   const [enviando, setEnviando] = useState(false);
@@ -387,7 +389,10 @@ export default function InboxPage() {
                         >
                           {m.tipo !== "TEXT" && (
                             <div className="mb-1.5">
-                              <Midia mensagem={m} />
+                              <Midia
+                                mensagem={m}
+                                onAbrirImagem={(src, descricao) => setImagemAberta({ src, descricao })}
+                              />
                             </div>
                           )}
                           {m.texto && <p className="whitespace-pre-wrap break-words">{m.texto}</p>}
@@ -531,6 +536,12 @@ export default function InboxPage() {
           </aside>
         )}
       </div>
+
+      <VisualizadorImagem
+        src={imagemAberta?.src ?? null}
+        descricao={imagemAberta?.descricao ?? ""}
+        onFechar={() => setImagemAberta(null)}
+      />
 
       <Transferir
         aberto={transferindo}
