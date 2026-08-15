@@ -5,7 +5,9 @@ import { env } from "./env.js";
 import { setOrgIdForLogs, waha } from "./integrations/waha.js";
 import { carregarSessao } from "./plugins/auth.js";
 import { authRoutes } from "./routes/auth.js";
+import { conversationRoutes } from "./routes/conversations.js";
 import { devRoutes } from "./routes/dev.js";
+import { streamRoutes } from "./routes/stream.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 
 const app = Fastify({
@@ -21,6 +23,17 @@ const app = Fastify({
 });
 
 await app.register(cookie);
+
+// Ações como "assumir" e "marcar como lida" não têm corpo. Sem isto o Fastify
+// devolve 415 para POST vazio, o que forçaria o front a mandar "{}" inútil.
+app.addContentTypeParser("application/json", { parseAs: "string" }, (_req, corpo, done) => {
+  if (!corpo || (typeof corpo === "string" && corpo.trim() === "")) return done(null, {});
+  try {
+    done(null, JSON.parse(corpo as string));
+  } catch {
+    done(new Error("JSON inválido"), undefined);
+  }
+});
 
 // Carrega a sessão em toda requisição; o bloqueio fica por conta de cada rota.
 app.addHook("preHandler", carregarSessao);
@@ -53,6 +66,8 @@ app.get("/health/ready", async (_request, reply) => {
 
 await app.register(webhookRoutes, { prefix: "/api/v1" });
 await app.register(authRoutes, { prefix: "/api/v1" });
+await app.register(conversationRoutes, { prefix: "/api/v1" });
+await app.register(streamRoutes, { prefix: "/api/v1" });
 
 if (env.NODE_ENV !== "production") {
   await app.register(devRoutes, { prefix: "/api/v1/dev" });

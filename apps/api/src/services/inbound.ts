@@ -12,6 +12,7 @@ import { prisma } from "@crm/db";
 import type { FastifyBaseLogger } from "fastify";
 import { env } from "../env.js";
 import { waha } from "../integrations/waha.js";
+import { publicar } from "../realtime/bus.js";
 
 /**
  * Pipeline de entrada de mensagem.
@@ -141,6 +142,13 @@ export async function processarMensagemRecebida(
   await prisma.conversation.update({
     where: { id: conversa.id },
     data: { lastMessageAt: agora, unreadCount: { increment: 1 } },
+  });
+
+  // A inbox de quem está com a tela aberta atualiza sem recarregar.
+  publicar({
+    tipo: "message.created",
+    conversationId: conversa.id,
+    dados: { quem: "CLIENTE", texto: msg.body ?? "", contato: contato.name, protocolo: conversa.protocol },
   });
 
   // 4. Quem responde agora? Ponto único de decisão.
