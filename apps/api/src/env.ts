@@ -10,6 +10,7 @@ const schema = z.object({
   LOG_LEVEL: z.string().default("info"),
 
   INTEGRATION_MODE: z.enum(["live", "sandbox", "disabled"]).default("disabled"),
+  CORS_ORIGINS: z.string().default("http://localhost:3000"),
 
   STORE_NAME: z.string().default("RISE"),
   INACTIVITY_WINDOW_MINUTES: z.coerce.number().default(360),

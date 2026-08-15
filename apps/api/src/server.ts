@@ -1,4 +1,5 @@
 import cookie from "@fastify/cookie";
+import cors from "@fastify/cors";
 import { prisma } from "@crm/db";
 import Fastify from "fastify";
 import { env } from "./env.js";
@@ -20,6 +21,13 @@ const app = Fastify({
   // O corpo cru é necessário para validar o HMAC do webhook: recalcular a
   // assinatura sobre o JSON re-serializado daria diferente.
   bodyLimit: 10 * 1024 * 1024,
+});
+
+// Origem explícita (nunca "*"): o cookie de sessão só viaja com origem
+// declarada e credentials habilitado.
+await app.register(cors, {
+  origin: env.CORS_ORIGINS.split(",").map((o) => o.trim()),
+  credentials: true,
 });
 
 await app.register(cookie);

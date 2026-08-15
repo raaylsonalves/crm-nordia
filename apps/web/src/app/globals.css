@@ -1,0 +1,49 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --fundo: #f5f1ea;
+  --superficie: #ffffff;
+  --borda: #e2dbd0;
+  --texto: #1c1b19;
+  --texto-suave: #6b6459;
+  --acento: #b4654a;
+}
+
+.dark {
+  --fundo: #141311;
+  --superficie: #1c1b19;
+  --borda: #2e2c28;
+  --texto: #f0ece5;
+  --texto-suave: #9a9287;
+  --acento: #c97a5e;
+}
+
+body {
+  background: var(--fundo);
+  color: var(--texto);
+  font-feature-settings: "cv02", "cv03", "cv04";
+}
+
+/* Barra de rolagem discreta, para não competir com o conteúdo. */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--borda);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes pulso {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.skeleton {
+  animation: pulso 1.5s ease-in-out infinite;
+  background: var(--borda);
+}
