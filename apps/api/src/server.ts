@@ -1,7 +1,10 @@
+import cookie from "@fastify/cookie";
 import { prisma } from "@crm/db";
 import Fastify from "fastify";
 import { env } from "./env.js";
 import { setOrgIdForLogs, waha } from "./integrations/waha.js";
+import { carregarSessao } from "./plugins/auth.js";
+import { authRoutes } from "./routes/auth.js";
 import { devRoutes } from "./routes/dev.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 
@@ -16,6 +19,11 @@ const app = Fastify({
   // assinatura sobre o JSON re-serializado daria diferente.
   bodyLimit: 10 * 1024 * 1024,
 });
+
+await app.register(cookie);
+
+// Carrega a sessão em toda requisição; o bloqueio fica por conta de cada rota.
+app.addHook("preHandler", carregarSessao);
 
 app.addHook("preValidation", async (request) => {
   if (typeof request.body === "object" && request.body !== null) {
@@ -44,6 +52,7 @@ app.get("/health/ready", async (_request, reply) => {
 });
 
 await app.register(webhookRoutes, { prefix: "/api/v1" });
+await app.register(authRoutes, { prefix: "/api/v1" });
 
 if (env.NODE_ENV !== "production") {
   await app.register(devRoutes, { prefix: "/api/v1/dev" });
