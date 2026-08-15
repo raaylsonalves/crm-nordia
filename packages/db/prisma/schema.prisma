@@ -1,0 +1,721 @@
+// CRM Rise — modelagem de dados
+// PostgreSQL 16 + pgvector. Migration inicial deve executar:
+//   CREATE EXTENSION IF NOT EXISTS vector;
+//   CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector, pg_trgm]
+}
+
+// ─────────────────────────── Organização e acesso ───────────────────────────
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  timezone  String   @default("America/Sao_Paulo")
+  settings  Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  users         User[]
+  contacts      Contact[]
+  conversations Conversation[]
+  queues        Queue[]
+  tags          Tag[]
+  integrations  Integration[]
+
+  @@map("organization")
+}
+
+enum UserRole {
+  ADMINISTRADOR
+  SUPERVISOR
+  ATENDENTE
+}
+
+enum UserStatus {
+  DISPONIVEL
+  AUSENTE
+  OCUPADO
+  OFFLINE
+}
+
+model User {
+  id             String     @id @default(uuid())
+  organizationId String
+  name           String
+  email          String
+  passwordHash   String
+  role           UserRole   @default(ATENDENTE)
+  status         UserStatus @default(OFFLINE)
+  avatarUrl      String?
+  maxConcurrent  Int        @default(6) // teto de atendimentos simultâneos
+  active         Boolean    @default(true)
+  lastSeenAt     DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  organization  Organization   @relation(fields: [organizationId], references: [id])
+  queueMembers  QueueMember[]
+  conversations Conversation[] @relation("assignee")
+  messages      Message[]
+  notes         Note[]
+  auditLogs     AuditLog[]
+
+  @@unique([organizationId, email])
+  @@index([organizationId, role])
+  @@map("app_user")
+}
+
+model Queue {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  description    String?
+  color          String   @default("#8B7355")
+  isDefault      Boolean  @default(false)
+  slaFirstReplyM Int      @default(5)  // minutos
+  slaResolutionM Int      @default(60)
+  businessHours  Json     @default("{}")
+  createdAt      DateTime @default(now())
+
+  organization  Organization   @relation(fields: [organizationId], references: [id])
+  members       QueueMember[]
+  conversations Conversation[]
+
+  @@unique([organizationId, name])
+  @@map("queue")
+}
+
+model QueueMember {
+  queueId String
+  userId  String
+  queue   Queue @relation(fields: [queueId], references: [id], onDelete: Cascade)
+  user    User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([queueId, userId])
+  @@map("queue_member")
+}
+
+// ─────────────────────────── Contatos e CRM ───────────────────────────
+
+model Contact {
+  id             String   @id @default(uuid())
+  organizationId String
+  waChatId       String // ex.: 5511987654321@c.us ou 31886072111283@lid
+  // Nulo quando o WhatsApp só expõe o LID (identificador interno) e não o
+  // número real. Inventar um telefone a partir do LID quebraria a busca.
+  phone          String?
+  name           String
+  email          String?
+  source         String? // botao_produto, campanha, organico, indicacao
+  profilePicUrl  String?
+  sizePreference String? // P, M, G, GG, 38, 40...
+  style          String? // classico, casual, festa, streetwear
+  interests      String[] @default([])
+  internalNotes  String?
+  nuvemshopId    String?
+  assigneeId     String?
+  lastContactAt  DateTime?
+  nextActionAt   DateTime?
+  nextActionNote String?
+  // Métricas materializadas a partir de order (recalculadas no sync)
+  totalSpent     Decimal  @default(0) @db.Decimal(12, 2)
+  orderCount     Int      @default(0)
+  avgTicket      Decimal  @default(0) @db.Decimal(12, 2)
+  lastPurchaseAt DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization  Organization   @relation(fields: [organizationId], references: [id])
+  conversations Conversation[]
+  orders        Order[]
+  opportunities Opportunity[]
+  consents      Consent[]
+  tags          ContactTag[]
+  notes         Note[]
+
+  @@unique([organizationId, waChatId])
+  @@index([organizationId, phone])
+  @@index([organizationId, assigneeId])
+  @@map("contact")
+}
+
+model Tag {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  color          String   @default("#6B7280")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  contacts     ContactTag[]
+
+  @@unique([organizationId, name])
+  @@map("tag")
+}
+
+model ContactTag {
+  contactId String
+  tagId     String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tag       Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, tagId])
+  @@map("contact_tag")
+}
+
+enum ConsentChannel {
+  WHATSAPP_MARKETING
+  WHATSAPP_TRANSACIONAL
+  EMAIL_MARKETING
+}
+
+model Consent {
+  id        String         @id @default(uuid())
+  contactId String
+  channel   ConsentChannel
+  granted   Boolean
+  basis     String // consentimento, execucao_contrato, legitimo_interesse
+  evidence  String? // texto/mensagem que originou o consentimento
+  createdAt DateTime       @default(now())
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([contactId, channel])
+  @@map("consent")
+}
+
+// ─────────────────────────── Conversas e mensagens ───────────────────────────
+
+enum ConversationState {
+  BOT
+  IA
+  AGUARDANDO_ATENDENTE
+  ATENDIMENTO_HUMANO
+  AGUARDANDO_CLIENTE
+  FINALIZADO
+}
+
+enum FunnelStage {
+  NOVO_CONTATO
+  TRIAGEM_AUTOMATICA
+  OPORTUNIDADE_VENDA
+  AGUARDANDO_ATENDENTE
+  EM_ATENDIMENTO
+  AGUARDANDO_PAGAMENTO
+  PEDIDO_REALIZADO
+  POS_VENDA
+  FINALIZADO
+}
+
+model Conversation {
+  id             String            @id @default(uuid())
+  organizationId String
+  contactId      String
+  queueId        String?
+  assigneeId     String?
+  protocol       String // #A7K2-4821, gerado na abertura
+  state          ConversationState @default(BOT)
+  funnelStage    FunnelStage       @default(NOVO_CONTATO)
+  priority       Int               @default(0) // 0 normal, 1 alta, 2 urgente
+  subject        String?
+  sentiment      String? // positivo, neutro, negativo
+  lastIntent     String?
+  // Falhas seguidas de interpretação de intenção. Duas transferem para humano.
+  // Campo próprio: usar `priority` para isso corrompia a ordenação da fila.
+  intentFailures Int               @default(0)
+  unreadCount    Int               @default(0)
+  wahaSession    String
+  // Marcos para métricas
+  openedAt       DateTime          @default(now())
+  welcomeSentAt  DateTime?
+  queuedAt       DateTime?
+  firstReplyAt   DateTime?
+  lastMessageAt  DateTime          @default(now())
+  closedAt       DateTime?
+  closeReason    String?
+  rating         Int?
+  ratingComment  String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  organization Organization        @relation(fields: [organizationId], references: [id])
+  contact      Contact             @relation(fields: [contactId], references: [id])
+  queue        Queue?              @relation(fields: [queueId], references: [id])
+  assignee     User?               @relation("assignee", fields: [assigneeId], references: [id])
+  messages     Message[]
+  events       ConversationEvent[]
+  notes        Note[]
+  aiRuns       AiInteraction[]
+  handoff      Handoff?
+
+  @@unique([organizationId, protocol])
+  @@index([organizationId, state, lastMessageAt])
+  @@index([organizationId, queueId, state])
+  @@index([contactId, openedAt])
+  @@map("conversation")
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageAuthorType {
+  CLIENTE
+  BOT
+  IA
+  ATENDENTE
+  SISTEMA
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  AUDIO
+  VIDEO
+  DOCUMENT
+  LOCATION
+  STICKER
+  TEMPLATE
+}
+
+enum MessageStatus {
+  PENDENTE
+  ENVIADO
+  ENTREGUE
+  LIDO
+  FALHA
+}
+
+model Message {
+  id             String            @id @default(uuid())
+  organizationId String
+  conversationId String
+  externalId     String? // id da mensagem na WAHA — base da idempotência
+  direction      MessageDirection
+  authorType     MessageAuthorType
+  authorUserId   String?
+  type           MessageType       @default(TEXT)
+  body           String?
+  mediaUrl       String? // chave no storage, nunca URL do provedor
+  mediaMimeType  String?
+  mediaSize      Int?
+  caption        String?
+  status         MessageStatus     @default(PENDENTE)
+  errorMessage   String?
+  quotedId       String?
+  metadata       Json              @default("{}") // sku, campanha, url de origem
+  sentAt         DateTime?
+  deliveredAt    DateTime?
+  readAt         DateTime?
+  createdAt      DateTime          @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  author       User?        @relation(fields: [authorUserId], references: [id])
+
+  @@unique([organizationId, externalId])
+  @@index([conversationId, createdAt])
+  @@map("message")
+}
+
+model ConversationEvent {
+  id             String   @id @default(uuid())
+  conversationId String
+  type           String // state_changed, assigned, transferred, stage_changed, ai_handoff, closed
+  fromValue      String?
+  toValue        String?
+  actorType      String // usuario, bot, ia, sistema, automacao
+  actorId        String?
+  reason         String?
+  payload        Json     @default("{}")
+  createdAt      DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("conversation_event")
+}
+
+model Handoff {
+  id              String   @id @default(uuid())
+  conversationId  String   @unique
+  reason          String // pedido_cliente, baixa_confianca, insatisfacao, pagamento, fora_da_base, falha_intencao
+  collectedName   String?
+  collectedReason String?
+  relatedProduct  String?
+  relatedOrder    String?
+  summary         String?
+  aiConfidence    Float?
+  createdAt       DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@map("handoff")
+}
+
+model Note {
+  id             String   @id @default(uuid())
+  contactId      String?
+  conversationId String?
+  authorId       String
+  body           String
+  createdAt      DateTime @default(now())
+
+  contact      Contact?      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  author       User          @relation(fields: [authorId], references: [id])
+
+  @@map("note")
+}
+
+// ─────────────────────────── Catálogo e pedidos (Nuvemshop) ───────────────────────────
+
+model Product {
+  id             String   @id @default(uuid())
+  organizationId String
+  nuvemshopId    String
+  name           String
+  handle         String?
+  description    String?
+  categories     String[] @default([])
+  brand          String?
+  published      Boolean  @default(true)
+  canonicalUrl   String?
+  images         Json     @default("[]")
+  syncedAt       DateTime @default(now())
+
+  variants ProductVariant[]
+
+  @@unique([organizationId, nuvemshopId])
+  @@index([organizationId, name])
+  @@map("product")
+}
+
+model ProductVariant {
+  id            String   @id @default(uuid())
+  productId     String
+  nuvemshopId   String   @unique
+  sku           String?
+  size          String?
+  color         String?
+  price         Decimal  @db.Decimal(12, 2)
+  promoPrice    Decimal? @db.Decimal(12, 2)
+  stock         Int      @default(0)
+  stockManaged  Boolean  @default(true)
+  weightGrams   Int?
+  syncedAt      DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+  @@index([sku])
+  @@map("product_variant")
+}
+
+enum OrderStatus {
+  ABERTO
+  PAGO
+  ENVIADO
+  ENTREGUE
+  CANCELADO
+  DEVOLVIDO
+}
+
+model Order {
+  id              String      @id @default(uuid())
+  organizationId  String
+  nuvemshopId     String
+  contactId       String?
+  number          String
+  status          OrderStatus
+  paymentStatus   String?
+  shippingStatus  String?
+  total           Decimal     @db.Decimal(12, 2)
+  currency        String      @default("BRL")
+  couponCode      String?
+  trackingCode    String?
+  trackingUrl     String?
+  customerEmail   String?
+  customerPhone   String?
+  placedAt        DateTime
+  paidAt          DateTime?
+  shippedAt       DateTime?
+  deliveredAt     DateTime?
+  raw             Json        @default("{}")
+  syncedAt        DateTime    @default(now())
+
+  contact Contact?    @relation(fields: [contactId], references: [id])
+  items   OrderItem[]
+
+  @@unique([organizationId, nuvemshopId])
+  @@index([organizationId, number])
+  @@index([contactId, placedAt])
+  @@map("order")
+}
+
+model OrderItem {
+  id          String  @id @default(uuid())
+  orderId     String
+  productName String
+  sku         String?
+  size        String?
+  color       String?
+  quantity    Int
+  unitPrice   Decimal @db.Decimal(12, 2)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("order_item")
+}
+
+// ─────────────────────────── Oportunidades ───────────────────────────
+
+model Opportunity {
+  id             String      @id @default(uuid())
+  organizationId String
+  contactId      String
+  title          String
+  stage          FunnelStage @default(OPORTUNIDADE_VENDA)
+  estimatedValue Decimal     @default(0) @db.Decimal(12, 2)
+  probability    Int         @default(50)
+  productsOfInterest Json    @default("[]") // [{productId, variantId, name}]
+  lossReason     String?
+  followUpAt     DateTime?
+  wonAt          DateTime?
+  lostAt         DateTime?
+  ownerId        String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, stage])
+  @@map("opportunity")
+}
+
+// ─────────────────────────── Base de conhecimento ───────────────────────────
+
+enum KbSourceType {
+  TEXTO
+  PDF
+  DOCX
+  URL
+}
+
+enum IndexStatus {
+  PENDENTE
+  PROCESSANDO
+  INDEXADO
+  FALHA
+}
+
+model KnowledgeDocument {
+  id             String       @id @default(uuid())
+  organizationId String
+  title          String
+  category       String // historia, tom_de_voz, faq, trocas, pagamento, envio, medidas, tecidos, colecoes, regras
+  sourceType     KbSourceType
+  sourceUrl      String?
+  fileKey        String?
+  content        String?
+  status         IndexStatus  @default(PENDENTE)
+  statusMessage  String?
+  chunkCount     Int          @default(0)
+  version        Int          @default(1)
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  indexedAt      DateTime?
+
+  chunks KnowledgeChunk[]
+
+  @@index([organizationId, category])
+  @@map("knowledge_document")
+}
+
+model KnowledgeChunk {
+  id         String   @id @default(uuid())
+  documentId String
+  ordinal    Int
+  content    String
+  tokenCount Int
+  // pgvector: dimensão conforme AI_EMBEDDING_DIM (padrão 1536).
+  // Índice criado por SQL manual na migration:
+  //   CREATE INDEX kb_chunk_embedding_idx ON knowledge_chunk
+  //     USING hnsw (embedding vector_cosine_ops);
+  embedding  Unsupported("vector(1536)")?
+  createdAt  DateTime @default(now())
+
+  document KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, ordinal])
+  @@map("knowledge_chunk")
+}
+
+// ─────────────────────────── IA ───────────────────────────
+
+model AiInteraction {
+  id             String   @id @default(uuid())
+  organizationId String
+  conversationId String?
+  purpose        String // resposta, sugestao, resumo, classificacao
+  model          String
+  systemPromptId String?
+  userInput      String
+  output         String?
+  intent         String?
+  sentiment      String?
+  confidence     Float?
+  retrievedChunks Json    @default("[]") // [{chunkId, documentTitle, score}]
+  toolCalls      Json     @default("[]")
+  handedOff      Boolean  @default(false)
+  promptTokens   Int?
+  outputTokens   Int?
+  latencyMs      Int?
+  costUsd        Decimal? @db.Decimal(10, 6)
+  error          String?
+  createdAt      DateTime @default(now())
+
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@map("ai_interaction")
+}
+
+// ─────────────────────────── Automações ───────────────────────────
+
+model Automation {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  description    String?
+  trigger        String // message.received, conversation.stage_changed, order.paid, order.shipped, ...
+  conditions     Json     @default("[]") // [{field, operator, value}] — AND entre itens
+  actions        Json     @default("[]") // [{type, params}]
+  enabled        Boolean  @default(true)
+  priority       Int      @default(100)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  runs AutomationRun[]
+
+  @@index([organizationId, trigger, enabled])
+  @@map("automation")
+}
+
+model AutomationRun {
+  id            String   @id @default(uuid())
+  automationId  String
+  conversationId String?
+  status        String // sucesso, falha, ignorado
+  matched       Boolean
+  attempt       Int      @default(1)
+  input         Json     @default("{}")
+  result        Json     @default("{}")
+  error         String?
+  durationMs    Int?
+  createdAt     DateTime @default(now())
+
+  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@index([automationId, createdAt])
+  @@map("automation_run")
+}
+
+// ─────────────────────────── Integrações e observabilidade ───────────────────────────
+
+enum IntegrationProvider {
+  WAHA
+  NUVEMSHOP
+  AI
+}
+
+enum IntegrationMode {
+  LIVE
+  SANDBOX
+  DISABLED
+}
+
+model Integration {
+  id             String              @id @default(uuid())
+  organizationId String
+  provider       IntegrationProvider
+  mode           IntegrationMode     @default(DISABLED)
+  config         Json                @default("{}") // dados não sensíveis: baseUrl, sessão, modelo
+  secretCipher   String? // AES-256-GCM; nunca sai da API
+  secretHint     String? // últimos 4 caracteres, para exibição
+  status         String              @default("desconectado")
+  statusMessage  String?
+  lastCheckedAt  DateTime?
+  lastEventAt    DateTime?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, provider])
+  @@map("integration")
+}
+
+model WebhookEvent {
+  id           String   @id @default(uuid())
+  provider     IntegrationProvider
+  externalId   String // id do evento/mensagem — garante idempotência
+  eventType    String
+  signatureOk  Boolean
+  payload      Json
+  processedAt  DateTime?
+  error        String?
+  receivedAt   DateTime @default(now())
+
+  @@unique([provider, externalId])
+  @@index([provider, receivedAt])
+  @@map("webhook_event")
+}
+
+model IntegrationLog {
+  id             String              @id @default(uuid())
+  organizationId String
+  provider       IntegrationProvider
+  direction      String // outbound, inbound
+  operation      String // sendText, getOrder, chatCompletion...
+  requestSummary Json                @default("{}") // já redigido: sem tokens, sem PII sensível
+  statusCode     Int?
+  success        Boolean
+  errorCode      String?
+  errorMessage   String?
+  durationMs     Int?
+  attempt        Int                 @default(1)
+  createdAt      DateTime            @default(now())
+
+  @@index([organizationId, provider, createdAt])
+  @@map("integration_log")
+}
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  organizationId String
+  userId         String?
+  action         String // conversation.assume, contact.export, integration.update...
+  entityType     String
+  entityId       String?
+  before         Json?
+  after          Json?
+  ip             String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([organizationId, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_log")
+}

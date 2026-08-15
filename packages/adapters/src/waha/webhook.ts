@@ -1,0 +1,119 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
+import type { AckEvent, AckStatus, InboundMessage } from "@crm/core";
+
+/** Envelope de webhook da WAHA. */
+export interface WahaWebhookBody {
+  id?: string;
+  event?: string;
+  session?: string;
+  payload?: Record<string, unknown>;
+}
+
+/**
+ * Confere o HMAC do webhook em tempo constante.
+ * Sem segredo configurado devolve `false` — cabe ao chamador decidir se a
+ * validação é obrigatória. Nunca "passa" por omissão silenciosa.
+ */
+export function verifySignature(rawBody: string, signature: string | undefined, secret: string | undefined): boolean {
+  if (!secret || !signature) return false;
+  const esperado = createHmac("sha256", secret).update(rawBody, "utf8").digest("hex");
+  const a = Buffer.from(esperado, "utf8");
+  const b = Buffer.from(signature.replace(/^sha256=/, ""), "utf8");
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+const TIPOS: Record<string, InboundMessage["type"]> = {
+  chat: "TEXT",
+  text: "TEXT",
+  image: "IMAGE",
+  audio: "AUDIO",
+  ptt: "AUDIO",
+  video: "VIDEO",
+  document: "DOCUMENT",
+  location: "LOCATION",
+  sticker: "STICKER",
+};
+
+const ACKS: Record<number, AckStatus> = {
+  [-1]: "FALHA",
+  1: "ENVIADO",
+  2: "ENTREGUE",
+  3: "LIDO",
+  4: "LIDO",
+};
+
+function asString(v: unknown): string | undefined {
+  return typeof v === "string" ? v : undefined;
+}
+
+/** Converte o payload bruto em mensagem de entrada. Devolve null se não for uma. */
+export function parseInboundMessage(body: WahaWebhookBody): InboundMessage | null {
+  if (body.event !== "message") return null;
+  const p = body.payload;
+  if (!p) return null;
+
+  const externalId = asString(p["id"]);
+  const chatId = asString(p["from"]);
+  if (!externalId || !chatId) return null;
+
+  const tipoBruto = asString(p["type"]) ?? "chat";
+  const media = p["media"] as Record<string, unknown> | undefined;
+  const timestamp = typeof p["timestamp"] === "number" ? new Date(p["timestamp"] * 1000) : new Date();
+
+  const mediaUrl = asString(media?.["url"]);
+  const mediaMime = asString(media?.["mimetype"]);
+  const dados = p["_data"] as Record<string, unknown> | undefined;
+  const pushName = asString(dados?.["notifyName"]) ?? asString(p["notifyName"]);
+  const caption = asString(p["caption"]);
+  const corpo = asString(p["body"]);
+
+  // O WhatsApp entrega, junto da mensagem real, eventos de protocolo sem corpo
+  // e sem mídia (chaves de criptografia, sincronização de dispositivo). Tratá-los
+  // como mensagem do cliente fazia o bot responder duas vezes e queimar o
+  // contador de tentativas de intenção.
+  if (!corpo && !mediaUrl && tipoBruto === "chat") return null;
+
+  return {
+    externalId,
+    chatId,
+    from: chatId,
+    fromMe: p["fromMe"] === true,
+    type: TIPOS[tipoBruto] ?? "TEXT",
+    timestamp,
+    session: body.session ?? "default",
+    ...(pushName ? { pushName } : {}),
+    ...(corpo ? { body: corpo } : {}),
+    ...(mediaUrl ? { mediaUrl } : {}),
+    ...(mediaMime ? { mediaMimeType: mediaMime } : {}),
+    ...(caption ? { caption } : {}),
+  };
+}
+
+/** Converte evento de confirmação (enviado/entregue/lido). */
+export function parseAck(body: WahaWebhookBody): AckEvent | null {
+  if (body.event !== "message.ack") return null;
+  const p = body.payload;
+  if (!p) return null;
+
+  const externalId = asString(p["id"]);
+  const ack = typeof p["ack"] === "number" ? p["ack"] : undefined;
+  if (!externalId || ack === undefined) return null;
+
+  const status = ACKS[ack];
+  if (!status) return null;
+
+  return { externalId, status, timestamp: new Date() };
+}
+
+/**
+ * Identificador do evento para idempotência. A WAHA nem sempre manda `id` no
+ * envelope, então caímos para o id da mensagem + evento — o par que de fato
+ * identifica a entrega.
+ */
+export function eventId(body: WahaWebhookBody): string | null {
+  if (body.id) return body.id;
+  const idPayload = asString(body.payload?.["id"]);
+  if (idPayload && body.event) return `${body.event}:${idPayload}`;
+  return null;
+}

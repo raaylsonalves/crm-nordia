@@ -1,0 +1,28 @@
+node_modules/
+dist/
+build/
+.next/
+out/
+coverage/
+.turbo/
+
+.env
+.env.*
+!.env.example
+
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# volumes locais
+docker/volumes/
+
+# chaves temporarias de setup
+*.tmp
+.waha-key.tmp

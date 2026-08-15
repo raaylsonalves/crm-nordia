@@ -1,0 +1,64 @@
+import { prisma } from "@crm/db";
+import Fastify from "fastify";
+import { env } from "./env.js";
+import { setOrgIdForLogs, waha } from "./integrations/waha.js";
+import { devRoutes } from "./routes/dev.js";
+import { webhookRoutes } from "./routes/webhooks.js";
+
+const app = Fastify({
+  logger: {
+    level: env.LOG_LEVEL,
+    ...(env.NODE_ENV === "development"
+      ? { transport: { target: "pino-pretty", options: { translateTime: "HH:MM:ss", ignore: "pid,hostname" } } }
+      : {}),
+  },
+  // O corpo cru é necessário para validar o HMAC do webhook: recalcular a
+  // assinatura sobre o JSON re-serializado daria diferente.
+  bodyLimit: 10 * 1024 * 1024,
+});
+
+app.addHook("preValidation", async (request) => {
+  if (typeof request.body === "object" && request.body !== null) {
+    (request as { rawBody?: string }).rawBody = JSON.stringify(request.body);
+  }
+});
+
+app.get("/health", async () => ({ status: "ok", mode: env.INTEGRATION_MODE }));
+
+app.get("/health/ready", async (_request, reply) => {
+  const checks: Record<string, string> = {};
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    checks["postgres"] = "ok";
+  } catch (error) {
+    checks["postgres"] = error instanceof Error ? error.message : "falha";
+  }
+  try {
+    const s = await waha.getSessionStatus();
+    checks["waha"] = s.connected ? `ok (${s.status})` : `desconectado (${s.status})`;
+  } catch (error) {
+    checks["waha"] = error instanceof Error ? error.message : "falha";
+  }
+  const ok = checks["postgres"] === "ok";
+  return reply.code(ok ? 200 : 503).send({ status: ok ? "ok" : "degradado", checks });
+});
+
+await app.register(webhookRoutes, { prefix: "/api/v1" });
+
+if (env.NODE_ENV !== "production") {
+  await app.register(devRoutes, { prefix: "/api/v1/dev" });
+  app.log.warn("rotas /api/v1/dev ativas SEM autenticação (apenas fora de produção)");
+}
+
+const org = await prisma.organization.findFirst({ where: { slug: "rise" }, select: { id: true } });
+if (org) setOrgIdForLogs(org.id);
+else app.log.error("organização 'rise' não encontrada — rode pnpm db:seed");
+
+await app.listen({ port: env.API_PORT, host: "0.0.0.0" });
+app.log.info(`integrações em modo ${env.INTEGRATION_MODE.toUpperCase()}`);
+
+for (const sinal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(sinal, () => {
+    void app.close().then(() => prisma.$disconnect()).then(() => process.exit(0));
+  });
+}
