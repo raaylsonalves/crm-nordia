@@ -140,7 +140,7 @@ export interface Mensagem {
   direcao: "INBOUND" | "OUTBOUND";
   tipo: string;
   texto: string | null;
-  midia: string | null;
+  temMidia: boolean;
   status: "PENDENTE" | "ENVIADO" | "ENTREGUE" | "LIDO" | "FALHA";
   erro: string | null;
   em: string;

@@ -12,6 +12,24 @@ import { API_URL, type Mensagem } from "@/lib/api";
 export function Midia({ mensagem }: { mensagem: Mensagem }) {
   const src = `${API_URL}/messages/${mensagem.id}/media`;
 
+  // Mídia não arquivada (mensagem anterior ao arquivamento, ou falha ao
+  // guardar). Um aviso honesto vale mais que o ícone de imagem quebrada.
+  if (!mensagem.temMidia) {
+    const rotulo =
+      mensagem.tipo === "IMAGE"
+        ? "Imagem"
+        : mensagem.tipo === "AUDIO"
+          ? "Áudio"
+          : mensagem.tipo === "VIDEO"
+            ? "Vídeo"
+            : "Arquivo";
+    return (
+      <div className="rounded-lg px-2.5 py-2 text-xs" style={{ background: "rgba(127,127,127,0.18)" }}>
+        <span aria-hidden>⚠️</span> {rotulo} não disponível — o arquivo não chegou a ser arquivado.
+      </div>
+    );
+  }
+
   if (mensagem.tipo === "IMAGE") {
     return (
       <a href={src} target="_blank" rel="noopener noreferrer" className="block">

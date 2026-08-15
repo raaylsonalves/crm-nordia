@@ -85,9 +85,13 @@ export function parseInboundMessage(body: WahaWebhookBody): InboundMessage | nul
   // contador de tentativas de intenção.
   if (!corpo && !mediaUrl && tipoBruto === "chat") return null;
 
-  // Em algumas versões da WAHA o campo `type` vem vazio nas mensagens de mídia.
-  // Nesse caso o tipo sai do mime, senão a foto do cliente entra como texto.
-  const tipo = TIPOS[tipoBruto] ?? tipoPeloMime(mimeDaMidia);
+  // O mime da mídia manda no tipo, sempre que existir.
+  //
+  // A WAHA às vezes não envia `type` (nulo ou vazio) em mensagem de mídia, e o
+  // valor padrão "chat" mapeava para TEXT — a foto do cliente entrava como
+  // texto e não era renderizada. Havendo mídia, o mime é a fonte confiável;
+  // `type` só decide quando não há mídia nenhuma.
+  const tipo = mimeDaMidia ? tipoPeloMime(mimeDaMidia) : (TIPOS[tipoBruto] ?? "TEXT");
 
   return {
     externalId,

@@ -57,7 +57,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
         contact: { select: { id: true, name: true, phone: true, waChatId: true } },
         assignee: { select: { id: true, name: true } },
         queue: { select: { id: true, name: true, color: true } },
-        messages: { orderBy: { createdAt: "desc" }, take: 1, select: { body: true, authorType: true, createdAt: true } },
+        messages: { orderBy: { createdAt: "desc" }, take: 1, select: { body: true, type: true, authorType: true, createdAt: true } },
       },
     });
 
@@ -72,7 +72,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       naoLidas: c.unreadCount,
       // Quem responde agora — o indicador visual da inbox.
       controlePor: controleAtual(c.state as ConversationState, c.assignee?.name),
-      previa: c.messages[0]?.body?.slice(0, 90) ?? null,
+      previa: previaDe(c.messages[0]),
       ultimaMensagem: c.lastMessageAt,
     }));
   });
@@ -151,7 +151,9 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       direcao: m.direction,
       tipo: m.type,
       texto: m.body,
-      midia: m.mediaUrl,
+      // Booleano, não a chave: o caminho interno do storage não interessa ao
+      // navegador, que busca a mídia pelo id da mensagem.
+      temMidia: m.mediaUrl !== null,
       status: m.status,
       erro: m.errorMessage,
       em: m.createdAt,
@@ -541,6 +543,25 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     });
     return reply.send({ id: nota.id });
   });
+}
+
+/**
+ * Prévia da última mensagem na lista. Mídia sem legenda não tem texto — sem
+ * isto a lista mostrava "Sem mensagens" para uma foto recém-chegada.
+ */
+function previaDe(mensagem: { body: string | null; type: string } | undefined): string | null {
+  if (!mensagem) return null;
+  if (mensagem.body?.trim()) return mensagem.body.slice(0, 90);
+
+  const rotulos: Record<string, string> = {
+    IMAGE: "📷 Imagem",
+    AUDIO: "🎤 Áudio",
+    VIDEO: "🎬 Vídeo",
+    DOCUMENT: "📎 Documento",
+    STICKER: "Figurinha",
+    LOCATION: "📍 Localização",
+  };
+  return rotulos[mensagem.type] ?? null;
 }
 
 function primeiroNome(nome: string): string {
