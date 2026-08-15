@@ -2,6 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { prisma, type UserRole } from "@crm/db";
 import bcrypt from "bcryptjs";
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { redis } from "../redis.js";
 
 export const COOKIE_NAME = "crm_session";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12h
@@ -15,32 +16,28 @@ export interface SessionUser {
 }
 
 /**
- * Sessões em memória do processo.
- *
- * Suficiente para uma instância; ao subir a segunda (ou ao reiniciar a API),
- * todo mundo é deslogado. Mover para Redis quando houver mais de um processo
- * — a troca é local a este arquivo.
+ * Sessões no Redis: sobrevivem ao restart da API e são compartilhadas entre
+ * instâncias. O TTL da chave faz a expiração — não há varredura a fazer.
  */
-const sessoes = new Map<string, { user: SessionUser; expiraEm: number }>();
+const CHAVE = (token: string) => `sessao:${token}`;
 
-export function criarSessao(user: SessionUser): string {
+export async function criarSessao(user: SessionUser): Promise<string> {
   const token = randomBytes(32).toString("base64url");
-  sessoes.set(token, { user, expiraEm: Date.now() + SESSION_TTL_MS });
+  await redis.set(CHAVE(token), JSON.stringify(user), "PX", SESSION_TTL_MS);
   return token;
 }
 
-export function destruirSessao(token: string): void {
-  sessoes.delete(token);
+export async function destruirSessao(token: string): Promise<void> {
+  await redis.del(CHAVE(token));
 }
 
-function lerSessao(token: string): SessionUser | null {
-  const s = sessoes.get(token);
-  if (!s) return null;
-  if (s.expiraEm < Date.now()) {
-    sessoes.delete(token);
-    return null;
-  }
-  return s.user;
+async function lerSessao(token: string): Promise<SessionUser | null> {
+  const bruto = await redis.get(CHAVE(token));
+  if (!bruto) return null;
+  // Renova o prazo a cada uso: quem está trabalhando não é deslogado no meio
+  // de um atendimento por causa do relógio.
+  await redis.pexpire(CHAVE(token), SESSION_TTL_MS);
+  return JSON.parse(bruto) as SessionUser;
 }
 
 declare module "fastify" {
@@ -56,8 +53,14 @@ export async function carregarSessao(request: FastifyRequest): Promise<void> {
   const match = cookie.split(";").map((c) => c.trim()).find((c) => c.startsWith(`${COOKIE_NAME}=`));
   if (!match) return;
   const token = match.slice(COOKIE_NAME.length + 1);
-  const usuario = lerSessao(token);
-  if (usuario) request.usuario = usuario;
+  try {
+    const usuario = await lerSessao(token);
+    if (usuario) request.usuario = usuario;
+  } catch (error) {
+    // Redis fora do ar não deve virar 500 silencioso: a requisição segue sem
+    // sessão e a rota devolve 401, que é o comportamento correto.
+    request.log.error({ err: error }, "falha ao ler sessão no Redis");
+  }
 }
 
 /**

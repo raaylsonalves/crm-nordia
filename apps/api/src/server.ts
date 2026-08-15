@@ -5,6 +5,7 @@ import Fastify from "fastify";
 import { env } from "./env.js";
 import { setOrgIdForLogs, waha } from "./integrations/waha.js";
 import { carregarSessao } from "./plugins/auth.js";
+import { redis, redisSaudavel } from "./redis.js";
 import { authRoutes } from "./routes/auth.js";
 import { conversationRoutes } from "./routes/conversations.js";
 import { devRoutes } from "./routes/dev.js";
@@ -62,13 +63,15 @@ app.get("/health/ready", async (_request, reply) => {
   } catch (error) {
     checks["postgres"] = error instanceof Error ? error.message : "falha";
   }
+  checks["redis"] = (await redisSaudavel()) ? "ok" : "indisponível";
   try {
     const s = await waha.getSessionStatus();
     checks["waha"] = s.connected ? `ok (${s.status})` : `desconectado (${s.status})`;
   } catch (error) {
     checks["waha"] = error instanceof Error ? error.message : "falha";
   }
-  const ok = checks["postgres"] === "ok";
+  // Sem Redis ninguém faz login: conta como degradado, não como saudável.
+  const ok = checks["postgres"] === "ok" && checks["redis"] === "ok";
   return reply.code(ok ? 200 : 503).send({ status: ok ? "ok" : "degradado", checks });
 });
 
@@ -91,6 +94,10 @@ app.log.info(`integrações em modo ${env.INTEGRATION_MODE.toUpperCase()}`);
 
 for (const sinal of ["SIGINT", "SIGTERM"] as const) {
   process.on(sinal, () => {
-    void app.close().then(() => prisma.$disconnect()).then(() => process.exit(0));
+    void app
+      .close()
+      .then(() => prisma.$disconnect())
+      .then(() => redis.quit())
+      .then(() => process.exit(0));
   });
 }

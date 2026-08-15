@@ -11,6 +11,7 @@ const schema = z.object({
 
   INTEGRATION_MODE: z.enum(["live", "sandbox", "disabled"]).default("disabled"),
   CORS_ORIGINS: z.string().default("http://localhost:3000"),
+  REDIS_URL: z.string().default("redis://localhost:6379"),
 
   STORE_NAME: z.string().default("RISE"),
   INACTIVITY_WINDOW_MINUTES: z.coerce.number().default(360),

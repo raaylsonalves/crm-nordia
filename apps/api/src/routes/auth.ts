@@ -40,7 +40,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     }
 
     tentativas.delete(chave);
-    const token = criarSessao(usuario);
+    const token = await criarSessao(usuario);
 
     await prisma.user.update({ where: { id: usuario.id }, data: { lastSeenAt: new Date() } });
     await prisma.auditLog.create({
@@ -73,7 +73,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       .map((c) => c.trim())
       .find((c) => c.startsWith(`${COOKIE_NAME}=`))
       ?.slice(COOKIE_NAME.length + 1);
-    if (token) destruirSessao(token);
+    if (token) await destruirSessao(token);
     return reply.clearCookie(COOKIE_NAME, { path: "/" }).send({ ok: true });
   });
 

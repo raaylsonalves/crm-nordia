@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { EstadoBadge, EstadoVazio, Skeleton } from "@/components/Badges";
+import { Confirmar } from "@/components/Confirmar";
 import {
   API_URL,
   ApiError,
@@ -46,6 +47,7 @@ export default function InboxPage() {
   const [texto, setTexto] = useState("");
   const [erro, setErro] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
+  const [confirmando, setConfirmando] = useState<"close" | "return-to-bot" | null>(null);
   const [enviando, setEnviando] = useState(false);
   const fimDaLista = useRef<HTMLDivElement>(null);
 
@@ -160,6 +162,24 @@ export default function InboxPage() {
 
   const borda = { borderColor: "var(--borda)" };
   const superficie = { background: "var(--superficie)" };
+
+  const CONFIRMACOES = {
+    close: {
+      titulo: "Finalizar este atendimento?",
+      descricao:
+        "O atendimento sai da lista de abertos e vira histórico. Se o cliente escrever de novo, abre um atendimento novo com outro protocolo.",
+      rotulo: "Finalizar",
+      destrutivo: true,
+      corpo: { motivo: "resolvido" } as unknown,
+    },
+    "return-to-bot": {
+      titulo: "Devolver para a automação?",
+      descricao: "Você deixa de ser responsável e o bot volta a conduzir a conversa.",
+      rotulo: "Devolver",
+      destrutivo: false,
+      corpo: undefined as unknown,
+    },
+  };
 
   return (
     <div className="flex h-screen flex-col">
@@ -421,20 +441,26 @@ export default function InboxPage() {
 
             <div className="mt-6 space-y-2">
               <Acao rotulo="Aguardar cliente" onClick={() => acao("wait-customer")} />
-              <Acao rotulo="Devolver para automação" onClick={() => acao("return-to-bot")} />
-              <Acao
-                rotulo="Finalizar atendimento"
-                destaque
-                onClick={() => {
-                  if (confirm("Finalizar este atendimento? O cliente precisará escrever de novo para reabrir.")) {
-                    void acao("close", { motivo: "resolvido" });
-                  }
-                }}
-              />
+              <Acao rotulo="Devolver para automação" onClick={() => setConfirmando("return-to-bot")} />
+              <Acao rotulo="Finalizar atendimento" destaque onClick={() => setConfirmando("close")} />
             </div>
           </aside>
         )}
       </div>
+
+      <Confirmar
+        aberto={confirmando !== null}
+        titulo={confirmando ? CONFIRMACOES[confirmando].titulo : ""}
+        descricao={confirmando ? CONFIRMACOES[confirmando].descricao : ""}
+        rotuloConfirmar={confirmando ? CONFIRMACOES[confirmando].rotulo : ""}
+        destrutivo={confirmando ? CONFIRMACOES[confirmando].destrutivo : false}
+        onCancelar={() => setConfirmando(null)}
+        onConfirmar={() => {
+          const acaoEscolhida = confirmando!;
+          setConfirmando(null);
+          void acao(acaoEscolhida, CONFIRMACOES[acaoEscolhida].corpo);
+        }}
+      />
     </div>
   );
 }
