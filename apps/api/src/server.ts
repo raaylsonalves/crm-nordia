@@ -1,5 +1,6 @@
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
+import multipart from "@fastify/multipart";
 import { prisma } from "@crm/db";
 import Fastify from "fastify";
 import { env } from "./env.js";
@@ -30,6 +31,9 @@ await app.register(cors, {
   origin: env.CORS_ORIGINS.split(",").map((o) => o.trim()),
   credentials: true,
 });
+
+// Limite de 16 MB: é o teto do próprio WhatsApp para mídia comum.
+await app.register(multipart, { limits: { fileSize: 16 * 1024 * 1024, files: 1 } });
 
 await app.register(cookie);
 

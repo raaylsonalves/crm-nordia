@@ -226,6 +226,129 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
+  // ── Mídia ───────────────────────────────────────────────────────────────
+
+  /**
+   * Serve a mídia recebida. O arquivo vive na WAHA e exige chave de API para
+   * ser baixado — por isso o navegador pede ao nosso back-end, que busca com a
+   * credencial e devolve o conteúdo. A chave nunca chega ao cliente.
+   */
+  app.get("/messages/:id/media", async (request, reply) => {
+    const { id } = idParam.parse(request.params);
+    const mensagem = await prisma.message.findFirst({
+      where: { id, organizationId: request.usuario!.organizationId },
+      select: { mediaUrl: true, mediaMimeType: true },
+    });
+
+    if (!mensagem?.mediaUrl) {
+      return reply.code(404).send({ error: { code: "SEM_MIDIA", message: "Mensagem sem mídia." } });
+    }
+
+    try {
+      const { conteudo, mimeType } = await waha.baixarMidia(mensagem.mediaUrl);
+      return reply
+        .header("Content-Type", mensagem.mediaMimeType ?? mimeType)
+        .header("Cache-Control", "private, max-age=3600")
+        .send(conteudo);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      request.log.error({ err: error, messageId: id }, "falha ao baixar mídia");
+      return reply.code(502).send({ error: { code: "FALHA_MIDIA", message: msg } });
+    }
+  });
+
+  /** Envio de foto, áudio ou documento pelo atendente. */
+  app.post("/conversations/:id/media", async (request, reply) => {
+    const { id } = idParam.parse(request.params);
+    const usuario = request.usuario!;
+
+    const arquivo = await request.file();
+    if (!arquivo) {
+      return reply.code(400).send({ error: { code: "SEM_ARQUIVO", message: "Envie um arquivo." } });
+    }
+
+    const conversa = await prisma.conversation.findFirst({
+      where: { id, organizationId: usuario.organizationId },
+      include: { contact: { select: { waChatId: true } } },
+    });
+    if (!conversa) return reply.code(404).send({ error: { code: "NAO_ENCONTRADA", message: "Conversa não encontrada." } });
+
+    const decisao = canRespond("ATENDENTE", conversa.state as ConversationState);
+    if (!decisao.allowed) {
+      return reply.code(409).send({ error: { code: "CONVERSA_BLOQUEADA", message: decisao.reason } });
+    }
+
+    const conteudo = await arquivo.toBuffer();
+    const mimeType = arquivo.mimetype;
+    const tipo = mimeType.startsWith("image/")
+      ? ("IMAGE" as const)
+      : mimeType.startsWith("audio/")
+        ? ("AUDIO" as const)
+        : mimeType.startsWith("video/")
+          ? ("VIDEO" as const)
+          : ("DOCUMENT" as const);
+
+    const legenda = (arquivo.fields["caption"] as { value?: string } | undefined)?.value;
+
+    try {
+      const enviado = await waha.sendMedia({
+        chatId: conversa.contact.waChatId,
+        base64: conteudo.toString("base64"),
+        mimeType,
+        filename: arquivo.filename,
+        ...(legenda ? { caption: legenda } : {}),
+      });
+
+      const mensagem = await prisma.message.create({
+        data: {
+          organizationId: usuario.organizationId,
+          conversationId: id,
+          externalId: enviado.externalId,
+          direction: "OUTBOUND",
+          authorType: "ATENDENTE",
+          authorUserId: usuario.id,
+          type: tipo,
+          body: legenda ?? null,
+          mediaMimeType: mimeType,
+          mediaSize: conteudo.length,
+          status: "ENVIADO",
+          sentAt: enviado.timestamp,
+        },
+      });
+
+      await prisma.conversation.update({ where: { id }, data: { lastMessageAt: new Date() } });
+      publicar({ tipo: "message.created", conversationId: id, dados: { id: mensagem.id, quem: "ATENDENTE" } });
+      return reply.send({ id: mensagem.id, tipo, status: "ENVIADO" });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      await prisma.message.create({
+        data: {
+          organizationId: usuario.organizationId,
+          conversationId: id,
+          direction: "OUTBOUND",
+          authorType: "ATENDENTE",
+          authorUserId: usuario.id,
+          type: tipo,
+          body: legenda ?? arquivo.filename,
+          mediaMimeType: mimeType,
+          status: "FALHA",
+          errorMessage: msg.slice(0, 1000),
+        },
+      });
+      return reply.code(502).send({ error: { code: "FALHA_ENVIO", message: msg } });
+    }
+  });
+
+  // ── Filas (setores de transferência) ────────────────────────────────────
+  app.get("/queues", async (request) => {
+    const filas = await prisma.queue.findMany({
+      where: { organizationId: request.usuario!.organizationId },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, color: true, description: true },
+    });
+    return filas;
+  });
+
   // ── Ações do atendente ──────────────────────────────────────────────────
   app.post("/conversations/:id/assume", async (request, reply) => {
     const { id } = idParam.parse(request.params);

@@ -39,7 +39,33 @@ export const api = {
   get: <T>(caminho: string) => request<T>(caminho),
   post: <T>(caminho: string, corpo?: unknown) =>
     request<T>(caminho, { method: "POST", body: corpo ? JSON.stringify(corpo) : undefined }),
+
+  /** Upload de mídia. Sem Content-Type: o navegador define o boundary. */
+  async upload<T>(caminho: string, arquivo: File, legenda?: string): Promise<T> {
+    const dados = new FormData();
+    dados.append("file", arquivo);
+    if (legenda) dados.append("caption", legenda);
+
+    const resposta = await fetch(`${API_URL}${caminho}`, {
+      method: "POST",
+      credentials: "include",
+      body: dados,
+    });
+
+    if (!resposta.ok) {
+      const corpo = await resposta.json().catch(() => null);
+      throw new ApiError(resposta.status, corpo?.error?.code ?? "ERRO", corpo?.error?.message ?? "Falha no envio.");
+    }
+    return resposta.json() as Promise<T>;
+  },
 };
+
+export interface Fila {
+  id: string;
+  name: string;
+  color: string;
+  description: string | null;
+}
 
 // ── Tipos ────────────────────────────────────────────────────────────────
 export interface Usuario {

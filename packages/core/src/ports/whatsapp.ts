@@ -66,6 +66,11 @@ export interface WhatsappPort {
 
   sendText(message: OutgoingText): Promise<SendResult>;
   sendMedia(message: OutgoingMedia): Promise<SendResult>;
+  /**
+   * Baixa a mídia recebida. A URL da WAHA exige a chave de API, que nunca pode
+   * ir para o navegador — por isso o download passa pelo nosso back-end.
+   */
+  baixarMidia(url: string): Promise<{ conteudo: Buffer; mimeType: string }>;
   markAsRead(chatId: string): Promise<void>;
   getSessionStatus(): Promise<SessionStatus>;
   restartSession(): Promise<void>;

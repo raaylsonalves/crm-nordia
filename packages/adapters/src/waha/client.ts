@@ -99,6 +99,27 @@ export class WahaAdapter implements WhatsappPort {
     };
   }
 
+  async baixarMidia(url: string): Promise<{ conteudo: Buffer; mimeType: string }> {
+    this.garantirAtivo();
+
+    // A URL vem do próprio provedor; só aceitamos as que apontam para a base
+    // configurada, para o CRM não virar um proxy de download arbitrário.
+    const base = this.config.baseUrl.replace(/\/$/, "");
+    if (!url.startsWith(base)) {
+      throw new Error(`URL de mídia fora do host da WAHA: ${url}`);
+    }
+
+    const resposta = await fetch(url, { headers: { "X-Api-Key": this.config.apiKey } });
+    if (!resposta.ok) {
+      throw new Error(`falha ao baixar mídia (HTTP ${resposta.status})`);
+    }
+
+    return {
+      conteudo: Buffer.from(await resposta.arrayBuffer()),
+      mimeType: resposta.headers.get("content-type") ?? "application/octet-stream",
+    };
+  }
+
   async markAsRead(chatId: string): Promise<void> {
     this.garantirAtivo();
     await this.http.request("markAsRead", "POST", `/api/${this.session}/chats/${encodeURIComponent(chatId)}/messages/read`, {});

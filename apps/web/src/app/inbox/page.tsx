@@ -4,6 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { EstadoBadge, EstadoVazio, Skeleton } from "@/components/Badges";
 import { Confirmar } from "@/components/Confirmar";
+import { Midia } from "@/components/Midia";
+import { Transferir } from "@/components/Transferir";
+import { useNotificacoes } from "@/lib/notificacoes";
 import {
   API_URL,
   ApiError,
@@ -48,6 +51,9 @@ export default function InboxPage() {
   const [erro, setErro] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
   const [confirmando, setConfirmando] = useState<"close" | "return-to-bot" | null>(null);
+  const [transferindo, setTransferindo] = useState(false);
+  const arquivoRef = useRef<HTMLInputElement>(null);
+  const { avisar, marcarTitulo } = useNotificacoes();
   const [enviando, setEnviando] = useState(false);
   const fimDaLista = useRef<HTMLDivElement>(null);
 
@@ -106,11 +112,28 @@ export default function InboxPage() {
       if (dados.conversationId === selecionada) void carregarConversa(dados.conversationId);
     };
 
-    fonte.addEventListener("message.created", aoReceber);
+    const aoReceberMensagem = (evento: MessageEvent) => {
+      const dados = JSON.parse(evento.data) as {
+        conversationId: string;
+        dados?: { quem?: string; texto?: string; contato?: string };
+      };
+      // Só avisa sobre mensagem do cliente: eco da própria resposta não é aviso.
+      if (dados.dados?.quem === "CLIENTE") {
+        avisar(dados.dados.contato ?? "cliente", dados.dados.texto ?? "Nova mensagem");
+      }
+      aoReceber(evento);
+    };
+
+    fonte.addEventListener("message.created", aoReceberMensagem);
     fonte.addEventListener("conversation.updated", aoReceber);
     fonte.addEventListener("conversation.assigned", aoReceber);
     return () => fonte.close();
-  }, [usuario, selecionada, carregarConversas, carregarConversa]);
+  }, [usuario, selecionada, carregarConversas, carregarConversa, avisar]);
+
+  // Contador no título da aba, para quem está em outra janela.
+  useEffect(() => {
+    marcarTitulo((conversas ?? []).reduce((soma, c) => soma + c.naoLidas, 0));
+  }, [conversas, marcarTitulo]);
 
   // ── Ações ──────────────────────────────────────────────────────────────
   const CONFIRMACAO: Record<string, string> = {
@@ -147,6 +170,43 @@ export default function InboxPage() {
       setErro(e instanceof ApiError ? e.message : "Falha ao enviar.");
     } finally {
       setEnviando(false);
+    }
+  }
+
+  async function enviarArquivo(e: React.ChangeEvent<HTMLInputElement>) {
+    const arquivo = e.target.files?.[0];
+    if (!arquivo || !selecionada) return;
+    e.target.value = ""; // permite reenviar o mesmo arquivo depois
+
+    if (arquivo.size > 16 * 1024 * 1024) {
+      setErro("Arquivo acima de 16 MB — o WhatsApp não aceita.");
+      return;
+    }
+
+    setEnviando(true);
+    setErro(null);
+    try {
+      await api.upload(`/conversations/${selecionada}/media`, arquivo, texto.trim() || undefined);
+      setTexto("");
+      await carregarConversa(selecionada);
+    } catch (err) {
+      setErro(err instanceof ApiError ? err.message : "Falha ao enviar o arquivo.");
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  async function transferir(filaId: string, motivo: string) {
+    setTransferindo(false);
+    if (!selecionada) return;
+    setErro(null);
+    try {
+      await api.post(`/conversations/${selecionada}/transfer`, { filaId, motivo });
+      await Promise.all([carregarConversa(selecionada), carregarConversas()]);
+      setAviso("Atendimento transferido.");
+      setTimeout(() => setAviso(null), 4000);
+    } catch (err) {
+      setErro(err instanceof ApiError ? err.message : "Não foi possível transferir.");
     }
   }
 
@@ -325,7 +385,12 @@ export default function InboxPage() {
                             border: doCliente ? "1px solid var(--borda)" : "none",
                           }}
                         >
-                          <p className="whitespace-pre-wrap break-words">{m.texto}</p>
+                          {m.tipo !== "TEXT" && (
+                            <div className="mb-1.5">
+                              <Midia mensagem={m} />
+                            </div>
+                          )}
+                          {m.texto && <p className="whitespace-pre-wrap break-words">{m.texto}</p>}
                           <p className="mt-1 text-[10px] opacity-70">
                             {m.quem === "ATENDENTE" ? (m.autor ?? "Atendente") : m.quem} · {hora(m.em)}
                             {m.status === "FALHA" && " · falhou"}
@@ -353,6 +418,24 @@ export default function InboxPage() {
               )}
 
               <form onSubmit={enviar} className="flex items-center gap-2 border-t px-4 py-3" style={{ ...borda, ...superficie }}>
+                <input
+                  ref={arquivoRef}
+                  type="file"
+                  className="hidden"
+                  accept="image/*,audio/*,video/*,.pdf,.doc,.docx"
+                  onChange={enviarArquivo}
+                />
+                <button
+                  type="button"
+                  onClick={() => arquivoRef.current?.click()}
+                  disabled={!detalhe.podeResponder || enviando}
+                  aria-label="Anexar arquivo"
+                  title="Anexar foto, áudio ou documento"
+                  className="rounded-lg border px-2.5 py-2 text-sm disabled:opacity-40"
+                  style={borda}
+                >
+                  📎
+                </button>
                 <input
                   value={texto}
                   onChange={(e) => setTexto(e.target.value)}
@@ -440,6 +523,7 @@ export default function InboxPage() {
             )}
 
             <div className="mt-6 space-y-2">
+              <Acao rotulo="Transferir para outro setor" onClick={() => setTransferindo(true)} />
               <Acao rotulo="Aguardar cliente" onClick={() => acao("wait-customer")} />
               <Acao rotulo="Devolver para automação" onClick={() => setConfirmando("return-to-bot")} />
               <Acao rotulo="Finalizar atendimento" destaque onClick={() => setConfirmando("close")} />
@@ -447,6 +531,13 @@ export default function InboxPage() {
           </aside>
         )}
       </div>
+
+      <Transferir
+        aberto={transferindo}
+        filaAtualId={detalhe?.fila?.id ?? null}
+        onTransferir={transferir}
+        onCancelar={() => setTransferindo(false)}
+      />
 
       <Confirmar
         aberto={confirmando !== null}
