@@ -12,6 +12,7 @@ import { prisma } from "@crm/db";
 import type { FastifyBaseLogger } from "fastify";
 import { env } from "../env.js";
 import { waha } from "../integrations/waha.js";
+import { chaveDeMidia, storage } from "../integrations/storage.js";
 import { publicar } from "../realtime/bus.js";
 
 /**
@@ -111,7 +112,28 @@ export async function processarMensagemRecebida(
       })
     : ultima;
 
-  // 3. Mensagem no histórico. A unique (organizationId, externalId) é a rede de
+  // 3. Mídia: baixar AGORA e guardar no nosso storage.
+  // A WAHA apaga o arquivo por TTL (padrão 3 minutos). Guardar só a URL dela
+  // significa perder a foto do cliente pouco depois — e é justamente o
+  // histórico que o atendimento precisa consultar semanas depois.
+  let chaveMidia: string | null = null;
+  if (msg.mediaUrl) {
+    try {
+      const { conteudo, mimeType } = await waha.baixarMidia(msg.mediaUrl);
+      chaveMidia = await storage.guardar(
+        chaveDeMidia(conversa.id, msg.externalId, msg.mediaMimeType ?? mimeType),
+        conteudo,
+        msg.mediaMimeType ?? mimeType,
+      );
+      log.info({ chave: chaveMidia, bytes: conteudo.length }, "mídia guardada");
+    } catch (error) {
+      // A mensagem entra no histórico mesmo assim: perder a mídia é ruim,
+      // perder o registro de que o cliente mandou algo é pior.
+      log.error({ err: error, externalId: msg.externalId }, "falha ao guardar mídia recebida");
+    }
+  }
+
+  // 4. Mensagem no histórico. A unique (organizationId, externalId) é a rede de
   // segurança final contra reentrega do mesmo evento.
   try {
     await prisma.message.create({
@@ -123,7 +145,8 @@ export async function processarMensagemRecebida(
         authorType: "CLIENTE",
         type: msg.type,
         body: msg.body ?? null,
-        mediaUrl: msg.mediaUrl ?? null,
+        // Guarda a CHAVE no nosso storage, não a URL da WAHA (que expira).
+        mediaUrl: chaveMidia,
         mediaMimeType: msg.mediaMimeType ?? null,
         caption: msg.caption ?? null,
         status: "LIDO",

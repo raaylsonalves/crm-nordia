@@ -3,6 +3,7 @@ import { prisma } from "@crm/db";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { waha } from "../integrations/waha.js";
+import { chaveDeMidia, storage } from "../integrations/storage.js";
 import { exigirPerfil } from "../plugins/auth.js";
 import { publicar } from "../realtime/bus.js";
 
@@ -245,10 +246,11 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     }
 
     try {
-      const { conteudo, mimeType } = await waha.baixarMidia(mensagem.mediaUrl);
+      // O conteúdo vem do nosso storage: a WAHA já apagou o original.
+      const conteudo = await storage.ler(mensagem.mediaUrl);
       return reply
-        .header("Content-Type", mensagem.mediaMimeType ?? mimeType)
-        .header("Cache-Control", "private, max-age=3600")
+        .header("Content-Type", mensagem.mediaMimeType ?? "application/octet-stream")
+        .header("Cache-Control", "private, max-age=86400")
         .send(conteudo);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -299,6 +301,19 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
         ...(legenda ? { caption: legenda } : {}),
       });
 
+      // Guarda o que o atendente enviou: o histórico precisa mostrar a foto
+      // depois, e a WAHA não devolve o que já foi enviado.
+      let chave: string | null = null;
+      try {
+        chave = await storage.guardar(
+          chaveDeMidia(id, enviado.externalId, mimeType),
+          conteudo,
+          mimeType,
+        );
+      } catch (erroStorage) {
+        request.log.error({ err: erroStorage }, "mídia enviada mas não arquivada");
+      }
+
       const mensagem = await prisma.message.create({
         data: {
           organizationId: usuario.organizationId,
@@ -309,6 +324,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
           authorUserId: usuario.id,
           type: tipo,
           body: legenda ?? null,
+          mediaUrl: chave,
           mediaMimeType: mimeType,
           mediaSize: conteudo.length,
           status: "ENVIADO",

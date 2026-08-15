@@ -47,6 +47,15 @@ function asString(v: unknown): string | undefined {
   return typeof v === "string" ? v : undefined;
 }
 
+/** Deduz o tipo pelo mime quando a WAHA não informa `type`. */
+function tipoPeloMime(mime: string | undefined): InboundMessage["type"] {
+  if (!mime) return "TEXT";
+  if (mime.startsWith("image/")) return "IMAGE";
+  if (mime.startsWith("audio/")) return "AUDIO";
+  if (mime.startsWith("video/")) return "VIDEO";
+  return "DOCUMENT";
+}
+
 /** Converte o payload bruto em mensagem de entrada. Devolve null se não for uma. */
 export function parseInboundMessage(body: WahaWebhookBody): InboundMessage | null {
   if (body.event !== "message") return null;
@@ -58,6 +67,8 @@ export function parseInboundMessage(body: WahaWebhookBody): InboundMessage | nul
   if (!externalId || !chatId) return null;
 
   const tipoBruto = asString(p["type"]) ?? "chat";
+  const mediaObj = p["media"] as Record<string, unknown> | undefined;
+  const mimeDaMidia = asString(mediaObj?.["mimetype"]) ?? asString(p["mimetype"]);
   const media = p["media"] as Record<string, unknown> | undefined;
   const timestamp = typeof p["timestamp"] === "number" ? new Date(p["timestamp"] * 1000) : new Date();
 
@@ -74,12 +85,16 @@ export function parseInboundMessage(body: WahaWebhookBody): InboundMessage | nul
   // contador de tentativas de intenção.
   if (!corpo && !mediaUrl && tipoBruto === "chat") return null;
 
+  // Em algumas versões da WAHA o campo `type` vem vazio nas mensagens de mídia.
+  // Nesse caso o tipo sai do mime, senão a foto do cliente entra como texto.
+  const tipo = TIPOS[tipoBruto] ?? tipoPeloMime(mimeDaMidia);
+
   return {
     externalId,
     chatId,
     from: chatId,
     fromMe: p["fromMe"] === true,
-    type: TIPOS[tipoBruto] ?? "TEXT",
+    type: tipo,
     timestamp,
     session: body.session ?? "default",
     ...(pushName ? { pushName } : {}),

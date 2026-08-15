@@ -13,6 +13,12 @@ const schema = z.object({
   CORS_ORIGINS: z.string().default("http://localhost:3000"),
   REDIS_URL: z.string().default("redis://localhost:6379"),
 
+  STORAGE_ENDPOINT: z.string().url().default("http://localhost:9000"),
+  STORAGE_BUCKET: z.string().default("crm-rise-media"),
+  STORAGE_ACCESS_KEY: z.string().default("crmminio"),
+  STORAGE_SECRET_KEY: z.string().default("crmminio123"),
+  STORAGE_REGION: z.string().default("us-east-1"),
+
   STORE_NAME: z.string().default("RISE"),
   INACTIVITY_WINDOW_MINUTES: z.coerce.number().default(360),
 

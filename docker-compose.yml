@@ -87,6 +87,10 @@ services:
       WHATSAPP_HOOK_URL: http://host.docker.internal:3333/api/v1/webhooks/waha
       WHATSAPP_HOOK_EVENTS: message,message.ack,session.status
       WAHA_LOG_LEVEL: info
+      # A WAHA apaga a mídia recebida depois deste prazo (padrão 180s).
+      # Damos uma hora de folga: o CRM baixa e guarda no próprio storage
+      # logo na chegada, mas a janela maior cobre uma falha temporária.
+      WHATSAPP_FILES_LIFETIME: "3600"
     ports:
       - "3001:3000"
     volumes:

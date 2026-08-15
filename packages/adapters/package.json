@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@crm/core": "workspace:*"
+    "@crm/core": "workspace:*",
+    "minio": "^8.0.2"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

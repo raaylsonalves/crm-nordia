@@ -102,14 +102,23 @@ export class WahaAdapter implements WhatsappPort {
   async baixarMidia(url: string): Promise<{ conteudo: Buffer; mimeType: string }> {
     this.garantirAtivo();
 
-    // A URL vem do próprio provedor; só aceitamos as que apontam para a base
-    // configurada, para o CRM não virar um proxy de download arbitrário.
+    // A WAHA monta a URL da mídia com o host que ela conhece internamente
+    // (por padrão localhost:3000), que não é o endereço por onde a alcançamos.
+    // Aproveitamos apenas o CAMINHO e remontamos sobre a base configurada.
+    // Isso corrige o host errado e, de quebra, impede que o CRM seja usado
+    // como proxy para baixar de qualquer endereço.
     const base = this.config.baseUrl.replace(/\/$/, "");
-    if (!url.startsWith(base)) {
-      throw new Error(`URL de mídia fora do host da WAHA: ${url}`);
+    let caminho: string;
+    try {
+      const parsed = new URL(url);
+      caminho = `${parsed.pathname}${parsed.search}`;
+    } catch {
+      caminho = url.startsWith("/") ? url : `/${url}`;
     }
 
-    const resposta = await fetch(url, { headers: { "X-Api-Key": this.config.apiKey } });
+    const resposta = await fetch(`${base}${caminho}`, {
+      headers: { "X-Api-Key": this.config.apiKey },
+    });
     if (!resposta.ok) {
       throw new Error(`falha ao baixar mídia (HTTP ${resposta.status})`);
     }
