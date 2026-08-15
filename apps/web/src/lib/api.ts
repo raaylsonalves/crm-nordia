@@ -82,6 +82,14 @@ export interface ConversaDetalhe {
   controlePor: string;
   podeResponder: boolean;
   handoff: { reason: string; summary: string | null } | null;
+  anteriores: {
+    id: string;
+    protocolo: string;
+    estado: Estado;
+    abertoEm: string;
+    fechadoEm: string | null;
+    motivo: string | null;
+  }[];
   contato: {
     id: string;
     nome: string;

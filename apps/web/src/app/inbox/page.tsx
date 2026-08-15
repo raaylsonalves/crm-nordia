@@ -14,15 +14,18 @@ import {
   type Usuario,
 } from "@/lib/api";
 
-const FILTROS: { rotulo: string; estado?: Estado; naoLidas?: boolean }[] = [
-  { rotulo: "Todos" },
-  { rotulo: "Novos", estado: "BOT" },
-  { rotulo: "Em triagem", estado: "IA" },
-  { rotulo: "Aguardando atendente", estado: "AGUARDANDO_ATENDENTE" },
-  { rotulo: "Em atendimento", estado: "ATENDIMENTO_HUMANO" },
-  { rotulo: "Aguardando cliente", estado: "AGUARDANDO_CLIENTE" },
-  { rotulo: "Finalizados", estado: "FINALIZADO" },
-  { rotulo: "Não lidos", naoLidas: true },
+/**
+ * Ordem por urgência, não pela máquina de estados: quem espera resposta vem
+ * primeiro. "Em aberto" é o padrão — atendimento finalizado é histórico.
+ */
+const FILTROS: { rotulo: string; estado?: Estado; naoLidas?: boolean; dica: string }[] = [
+  { rotulo: "Em aberto", dica: "Tudo que ainda precisa de alguma ação" },
+  { rotulo: "Esperando você", estado: "AGUARDANDO_ATENDENTE", dica: "Cliente pediu atendimento humano" },
+  { rotulo: "Não lidos", naoLidas: true, dica: "Com mensagens que você ainda não abriu" },
+  { rotulo: "Comigo", estado: "ATENDIMENTO_HUMANO", dica: "Atendimentos que você assumiu" },
+  { rotulo: "No automático", estado: "BOT", dica: "Bot conduzindo a triagem" },
+  { rotulo: "Aguardando cliente", estado: "AGUARDANDO_CLIENTE", dica: "Você respondeu, falta o cliente" },
+  { rotulo: "Finalizados", estado: "FINALIZADO", dica: "Histórico de atendimentos encerrados" },
 ];
 
 const brl = (v: string | number) =>
@@ -42,6 +45,7 @@ export default function InboxPage() {
   const [busca, setBusca] = useState("");
   const [texto, setTexto] = useState("");
   const [erro, setErro] = useState<string | null>(null);
+  const [aviso, setAviso] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
   const fimDaLista = useRef<HTMLDivElement>(null);
 
@@ -107,12 +111,22 @@ export default function InboxPage() {
   }, [usuario, selecionada, carregarConversas, carregarConversa]);
 
   // ── Ações ──────────────────────────────────────────────────────────────
+  const CONFIRMACAO: Record<string, string> = {
+    assume: "Atendimento assumido. O cliente foi avisado no WhatsApp.",
+    "wait-customer": "Marcado como aguardando o cliente.",
+    "return-to-bot": "Devolvido para a automação.",
+    close: "Atendimento finalizado.",
+  };
+
   async function acao(nome: string, corpo?: unknown) {
     if (!selecionada) return;
     setErro(null);
+    setAviso(null);
     try {
       await api.post(`/conversations/${selecionada}/${nome}`, corpo);
       await Promise.all([carregarConversa(selecionada), carregarConversas()]);
+      setAviso(CONFIRMACAO[nome] ?? "Pronto.");
+      setTimeout(() => setAviso(null), 4000);
     } catch (e) {
       setErro(e instanceof ApiError ? e.message : "Não foi possível concluir a ação.");
     }
@@ -182,6 +196,8 @@ export default function InboxPage() {
               <button
                 key={f.rotulo}
                 onClick={() => setFiltro(i)}
+                title={f.dica}
+                aria-pressed={filtro === i}
                 className="rounded-full px-2.5 py-1 text-xs font-medium transition"
                 style={
                   filtro === i
@@ -192,6 +208,9 @@ export default function InboxPage() {
                 {f.rotulo}
               </button>
             ))}
+            <p className="mt-1 w-full text-[11px]" style={{ color: "var(--texto-suave)" }}>
+              {FILTROS[filtro]!.dica}
+            </p>
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto">
@@ -307,6 +326,11 @@ export default function InboxPage() {
                   {erro}
                 </p>
               )}
+              {aviso && (
+                <p role="status" className="mx-5 mb-2 rounded-lg px-3 py-2 text-sm" style={{ background: "#e8f5e9", color: "#1b5e20" }}>
+                  {aviso}
+                </p>
+              )}
 
               <form onSubmit={enviar} className="flex items-center gap-2 border-t px-4 py-3" style={{ ...borda, ...superficie }}>
                 <input
@@ -357,6 +381,34 @@ export default function InboxPage() {
               <Linha rotulo="Total gasto" valor={brl(detalhe.contato.totalGasto)} />
               <Linha rotulo="Ticket médio" valor={brl(detalhe.contato.ticketMedio)} />
             </dl>
+
+            {detalhe.anteriores.length > 0 && (
+              <div className="mt-5">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--texto-suave)" }}>
+                  Atendimentos anteriores ({detalhe.anteriores.length})
+                </p>
+                <div className="space-y-1.5">
+                  {detalhe.anteriores.map((a) => (
+                    <button
+                      key={a.id}
+                      onClick={() => setSelecionada(a.id)}
+                      className="w-full rounded-lg border px-2.5 py-2 text-left text-xs transition hover:opacity-80"
+                      style={borda}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium">#{a.protocolo}</span>
+                        <span style={{ color: "var(--texto-suave)" }}>
+                          {new Date(a.abertoEm).toLocaleDateString("pt-BR")}
+                        </span>
+                      </div>
+                      <p className="mt-0.5" style={{ color: "var(--texto-suave)" }}>
+                        {a.estado === "FINALIZADO" ? `Encerrado — ${a.motivo ?? "sem motivo"}` : "Em andamento"}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {detalhe.handoff && (
               <div className="mt-5 rounded-lg border p-3 text-xs" style={borda}>

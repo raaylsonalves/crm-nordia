@@ -16,6 +16,9 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     const q = z
       .object({
         estado: z.string().optional(),
+        // Sem estado explícito, a inbox mostra só o que exige ação. Atendimento
+        // encerrado é histórico, não fila de trabalho.
+        incluirFinalizados: z.coerce.boolean().default(false),
         filaId: z.string().uuid().optional(),
         responsavelId: z.string().uuid().optional(),
         naoLidas: z.coerce.boolean().optional(),
@@ -29,7 +32,11 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     const conversas = await prisma.conversation.findMany({
       where: {
         organizationId: usuario.organizationId,
-        ...(q.estado ? { state: q.estado as ConversationState } : {}),
+        ...(q.estado
+          ? { state: q.estado as ConversationState }
+          : q.incluirFinalizados
+            ? {}
+            : { state: { not: "FINALIZADO" as ConversationState } }),
         ...(q.filaId ? { queueId: q.filaId } : {}),
         ...(q.responsavelId ? { assigneeId: q.responsavelId } : {}),
         ...(q.naoLidas ? { unreadCount: { gt: 0 } } : {}),
@@ -83,6 +90,15 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     });
     if (!c) return reply.code(404).send({ error: { code: "NAO_ENCONTRADA", message: "Conversa não encontrada." } });
 
+    // Atendimentos anteriores do mesmo contato. É o que evita a leitura de
+    // "conversas repetidas": são tickets distintos da mesma pessoa.
+    const anteriores = await prisma.conversation.findMany({
+      where: { contactId: c.contactId, id: { not: c.id } },
+      orderBy: { openedAt: "desc" },
+      take: 10,
+      select: { id: true, protocol: true, state: true, openedAt: true, closedAt: true, closeReason: true },
+    });
+
     return {
       id: c.id,
       protocolo: c.protocol,
@@ -93,6 +109,14 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       controlePor: controleAtual(c.state as ConversationState, c.assignee?.name),
       podeResponder: canRespond("ATENDENTE", c.state as ConversationState).allowed,
       handoff: c.handoff,
+      anteriores: anteriores.map((a) => ({
+        id: a.id,
+        protocolo: a.protocol,
+        estado: a.state,
+        abertoEm: a.openedAt,
+        fechadoEm: a.closedAt,
+        motivo: a.closeReason,
+      })),
       contato: {
         id: c.contact.id,
         nome: c.contact.name,
@@ -240,6 +264,51 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
 
     if (!conversa) return reply.code(404).send({ error: { code: "NAO_ENCONTRADA", message: "Conversa não encontrada." } });
 
+    // Avisa o cliente que saiu do automático e tem uma pessoa do outro lado.
+    // Sem isso, quem estava conversando com o bot não percebe a troca e fica
+    // esperando uma resposta que já está a caminho.
+    const contato = await prisma.contact.findUnique({
+      where: { id: conversa.contactId },
+      select: { waChatId: true },
+    });
+    if (contato) {
+      const aviso = `Oi! Aqui é ${primeiroNome(usuario.name)}, da RISE. Assumi seu atendimento e já vou te responder. 😊`;
+      try {
+        const enviado = await waha.sendText({ chatId: contato.waChatId, text: aviso });
+        await prisma.message.create({
+          data: {
+            organizationId: usuario.organizationId,
+            conversationId: id,
+            externalId: enviado.externalId,
+            direction: "OUTBOUND",
+            authorType: "ATENDENTE",
+            authorUserId: usuario.id,
+            type: "TEXT",
+            body: aviso,
+            status: "ENVIADO",
+            sentAt: enviado.timestamp,
+          },
+        });
+      } catch (error) {
+        // Assumir não pode falhar porque o aviso não saiu: a conversa já é
+        // do atendente. A falha fica registrada no histórico.
+        request.log.error({ err: error, conversationId: id }, "falha ao avisar o cliente");
+        await prisma.message.create({
+          data: {
+            organizationId: usuario.organizationId,
+            conversationId: id,
+            direction: "OUTBOUND",
+            authorType: "ATENDENTE",
+            authorUserId: usuario.id,
+            type: "TEXT",
+            body: aviso,
+            status: "FALHA",
+            errorMessage: (error instanceof Error ? error.message : String(error)).slice(0, 1000),
+          },
+        });
+      }
+    }
+
     publicar({ tipo: "conversation.assigned", conversationId: id, dados: { responsavel: usuario.name } });
     return reply.send({ estado: conversa.state, responsavel: usuario.name });
   });
@@ -333,6 +402,10 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     });
     return reply.send({ id: nota.id });
   });
+}
+
+function primeiroNome(nome: string): string {
+  return nome.split(" ")[0] ?? nome;
 }
 
 function controleAtual(estado: ConversationState, responsavel?: string): string {
