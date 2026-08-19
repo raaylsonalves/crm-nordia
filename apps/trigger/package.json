@@ -4,15 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "npx trigger.dev@latest dev",
-    "deploy": "npx trigger.dev@latest deploy",
+    "dev": "npx trigger.dev@4.5.11 dev",
+    "deploy": "npx trigger.dev@4.5.11 deploy",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@crm/adapters": "workspace:*",
     "@crm/core": "workspace:*",
     "@crm/db": "workspace:*",
-    "@trigger.dev/sdk": "^3.3.17"
+    "@trigger.dev/sdk": "4.5.11"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

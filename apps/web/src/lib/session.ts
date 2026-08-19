@@ -12,7 +12,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { prisma, type UserRole } from "@crm/db";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
-import { redis } from "./redis.js";
+import { kv } from "./kv.js";
 
 export const COOKIE_NAME = "crm_session";
 const SESSION_TTL_S = 12 * 60 * 60; // 12h
@@ -29,18 +29,21 @@ const CHAVE = (token: string) => `sessao:${token}`;
 
 export async function criarSessao(user: SessionUser): Promise<string> {
   const token = randomBytes(32).toString("base64url");
-  await redis.set(CHAVE(token), JSON.stringify(user), "EX", SESSION_TTL_S);
+  const store = await kv();
+  await store.setComExpiracao(CHAVE(token), JSON.stringify(user), SESSION_TTL_S);
   return token;
 }
 
 export async function destruirSessao(token: string): Promise<void> {
-  await redis.del(CHAVE(token));
+  const store = await kv();
+  await store.del(CHAVE(token));
 }
 
 async function lerSessao(token: string): Promise<SessionUser | null> {
-  const bruto = await redis.get(CHAVE(token));
+  const store = await kv();
+  const bruto = await store.get(CHAVE(token));
   if (!bruto) return null;
-  await redis.expire(CHAVE(token), SESSION_TTL_S);
+  await store.expirar(CHAVE(token), SESSION_TTL_S);
   return JSON.parse(bruto) as SessionUser;
 }
 
@@ -51,8 +54,11 @@ export async function usuarioAtual(): Promise<SessionUser | null> {
   if (!token) return null;
   try {
     return await lerSessao(token);
-  } catch {
-    // Redis fora do ar: trata como não autenticado, não como erro 500.
+  } catch (error) {
+    // Trata como não autenticado, não como erro 500 — mas registra: um
+    // catch silencioso já escondeu um bug real aqui uma vez (desserialização
+    // automática do Upstash), não deve voltar a esconder o próximo.
+    console.error("[sessao] falha ao ler sessão:", error);
     return null;
   }
 }

@@ -26,3 +26,5 @@ docker/volumes/
 # chaves temporarias de setup
 *.tmp
 .waha-key.tmp
+apps/trigger/.trigger/
+apps/trigger/.env

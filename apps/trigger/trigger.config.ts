@@ -6,7 +6,7 @@ import { defineConfig } from "@trigger.dev/sdk/v3";
  * e `trigger.dev deploy` não sabem em qual projeto rodar.
  */
 export default defineConfig({
-  project: process.env.TRIGGER_PROJECT_REF ?? "proj_preencher_aqui",
+  project: process.env.TRIGGER_PROJECT_REF ?? "proj_rzaroojjmchghgggqyfe",
   runtime: "node",
   logLevel: "log",
   maxDuration: 120,
