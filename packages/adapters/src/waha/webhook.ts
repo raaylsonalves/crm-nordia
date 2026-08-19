@@ -13,12 +13,22 @@ export interface WahaWebhookBody {
  * Confere o HMAC do webhook em tempo constante.
  * Sem segredo configurado devolve `false` — cabe ao chamador decidir se a
  * validação é obrigatória. Nunca "passa" por omissão silenciosa.
+ *
+ * A WAHA manda a assinatura no header `X-Webhook-Hmac` (hex, sem prefixo) e
+ * o algoritmo em `X-Webhook-Hmac-Algorithm` — por padrão sha512, não sha256
+ * como se poderia supor pela convenção mais comum (GitHub, Stripe etc.).
+ * Confirmado inspecionando um payload real: ver docs/07-deploy-vercel.md.
  */
-export function verifySignature(rawBody: string, signature: string | undefined, secret: string | undefined): boolean {
+export function verifySignature(
+  rawBody: string,
+  signature: string | undefined,
+  secret: string | undefined,
+  algorithm: string = "sha512",
+): boolean {
   if (!secret || !signature) return false;
-  const esperado = createHmac("sha256", secret).update(rawBody, "utf8").digest("hex");
+  const esperado = createHmac(algorithm, secret).update(rawBody, "utf8").digest("hex");
   const a = Buffer.from(esperado, "utf8");
-  const b = Buffer.from(signature.replace(/^sha256=/, ""), "utf8");
+  const b = Buffer.from(signature.replace(/^sha\d+=/, ""), "utf8");
   if (a.length !== b.length) return false;
   return timingSafeEqual(a, b);
 }

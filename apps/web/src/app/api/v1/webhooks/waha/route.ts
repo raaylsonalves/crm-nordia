@@ -14,14 +14,15 @@ export async function POST(request: Request) {
   const raw = await request.text();
   const body = JSON.parse(raw) as WahaWebhookBody;
 
-  const assinatura = request.headers.get("x-waha-signature") ?? undefined;
+  const assinatura = request.headers.get("x-webhook-hmac") ?? undefined;
+  const algoritmo = request.headers.get("x-webhook-hmac-algorithm") ?? "sha512";
   const token = request.headers.get("x-webhook-token") ?? undefined;
   const hmacSecret = process.env.WAHA_WEBHOOK_HMAC_SECRET;
   const tokenEsperado = process.env.WAHA_WEBHOOK_TOKEN;
 
   let assinaturaOk = false;
   if (hmacSecret) {
-    assinaturaOk = verifySignature(raw, assinatura, hmacSecret);
+    assinaturaOk = verifySignature(raw, assinatura, hmacSecret, algoritmo);
     if (!assinaturaOk) {
       return NextResponse.json({ error: { code: "WEBHOOK_SIGNATURE_INVALID", message: "Assinatura inválida." } }, { status: 401 });
     }

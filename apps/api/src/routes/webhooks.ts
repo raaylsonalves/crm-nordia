@@ -19,12 +19,13 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     const raw = (request as { rawBody?: string }).rawBody ?? JSON.stringify(body);
 
     // 1. Autenticação do webhook.
-    const assinatura = request.headers["x-waha-signature"] as string | undefined;
+    const assinatura = request.headers["x-webhook-hmac"] as string | undefined;
+    const algoritmo = (request.headers["x-webhook-hmac-algorithm"] as string | undefined) ?? "sha512";
     const token = request.headers["x-webhook-token"] as string | undefined;
 
     let assinaturaOk = false;
     if (env.WAHA_WEBHOOK_HMAC_SECRET) {
-      assinaturaOk = verifySignature(raw, assinatura, env.WAHA_WEBHOOK_HMAC_SECRET);
+      assinaturaOk = verifySignature(raw, assinatura, env.WAHA_WEBHOOK_HMAC_SECRET, algoritmo);
       if (!assinaturaOk) {
         request.log.warn("webhook WAHA com assinatura inválida");
         return reply.code(401).send({ error: { code: "WEBHOOK_SIGNATURE_INVALID", message: "Assinatura inválida." } });
