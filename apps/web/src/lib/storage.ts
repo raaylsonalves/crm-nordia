@@ -7,12 +7,18 @@ import { MinioStorage } from "@crm/adapters";
  * "Duplicação consciente"). Compatível com Cloudflare R2 sem alteração: é
  * S3-compatível.
  */
+// O construtor do MinioStorage faz `new URL(endpoint)` — roda na hora do
+// import, inclusive durante `next build` (coleta de metadados das rotas).
+// STORAGE_ENDPOINT="" no ambiente (variável definida mas vazia, ex.:
+// deixada em branco no dashboard da Vercel) não é pega por `??` — só
+// `undefined`/`null` são — e quebrava o build inteiro com ERR_INVALID_URL.
+// `||` cobre string vazia também.
 export const storage = new MinioStorage({
-  endpoint: process.env.STORAGE_ENDPOINT ?? "http://localhost:9000",
-  bucket: process.env.STORAGE_BUCKET ?? "crm-rise-media",
-  accessKey: process.env.STORAGE_ACCESS_KEY ?? "",
-  secretKey: process.env.STORAGE_SECRET_KEY ?? "",
-  region: process.env.STORAGE_REGION ?? "us-east-1",
+  endpoint: process.env.STORAGE_ENDPOINT || "http://localhost:9000",
+  bucket: process.env.STORAGE_BUCKET || "crm-rise-media",
+  accessKey: process.env.STORAGE_ACCESS_KEY || "",
+  secretKey: process.env.STORAGE_SECRET_KEY || "",
+  region: process.env.STORAGE_REGION || "us-east-1",
 });
 
 export function chaveDeMidia(conversationId: string, externalId: string, mimeType: string): string {
