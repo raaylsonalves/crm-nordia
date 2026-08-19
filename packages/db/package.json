@@ -12,6 +12,7 @@
     "push": "prisma db push",
     "indexes": "tsx prisma/apply-indexes.ts",
     "seed": "tsx prisma/seed.ts",
+    "seed:nordia": "tsx prisma/seed-nordia.ts",
     "reset": "prisma migrate reset --force && pnpm indexes && pnpm seed",
     "studio": "prisma studio",
     "typecheck": "tsc --noEmit"

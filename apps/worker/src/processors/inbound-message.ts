@@ -3,6 +3,7 @@ import {
   gerarProtocolo,
   interpretarOpcao,
   montarMenu,
+  montarSaudacaoColeta,
   montarTransferencia,
   shouldOpenNewConversation,
   type ConversationState,
@@ -14,6 +15,7 @@ import type { Logger } from "pino";
 import { env } from "../env.js";
 import { chaveDeMidia, storage } from "../integrations/storage.js";
 import { waha } from "../integrations/waha.js";
+import { resolverOrganizacaoPorSessao } from "../org.js";
 import { publicar } from "../realtime.js";
 
 /**
@@ -27,11 +29,14 @@ import { publicar } from "../realtime.js";
 export async function processarMensagemRecebida(job: Job<InboundMessageJob>, log: Logger): Promise<void> {
   const { message: msg, webhookEventId } = job.data;
 
-  const org = await prisma.organization.findFirst({ where: { slug: "rise" } });
+  // A sessão é quem diz de qual organização é a mensagem — nunca um valor
+  // fixo. Sem isso, ligar uma segunda empresa (ex.: NORDIA) processaria as
+  // mensagens dela sob a organização errada.
+  const org = await resolverOrganizacaoPorSessao(msg.session);
   if (!org) {
     // Não é um erro transitório — retentar não resolve. Registra e não relança.
-    log.error("organização não encontrada — rode o seed");
-    await marcarProcessado(webhookEventId, "organização 'rise' não encontrada");
+    log.error({ session: msg.session }, "nenhuma organização configurada para esta sessão WAHA");
+    await marcarProcessado(webhookEventId, `sessão WAHA '${msg.session}' não está associada a nenhuma organização`);
     return;
   }
 
@@ -42,6 +47,9 @@ export async function processarMensagemRecebida(job: Job<InboundMessageJob>, log
     typeof settings["inactivityWindowMinutes"] === "number"
       ? settings["inactivityWindowMinutes"]
       : env.INACTIVITY_WINDOW_MINUTES;
+  // "menu" (padrão, comportamento da RISE) ou "greet_and_collect" (NORDIA):
+  // ver a ramificação no passo 6, abaixo.
+  const flowType = typeof settings["flowType"] === "string" ? settings["flowType"] : "menu";
 
   // 1. Contato — identificado pelo chatId.
   // O WhatsApp pode entregar um LID (identificador interno, ex.: 31886072111283@lid)
@@ -181,6 +189,50 @@ export async function processarMensagemRecebida(job: Job<InboundMessageJob>, log
   }
 
   // 6. Fluxo do bot.
+  //
+  // Organizações que não vendem produto por produto (ex.: a NORDIA, uma
+  // prestadora de soluções tecnológicas) não precisam de menu numérico: a
+  // saudação já pede o contexto do que a pessoa procura, e a resposta dela
+  // vai direto para a fila humana como resumo do pedido. Isso não altera em
+  // nada o fluxo de menu abaixo, usado pela RISE.
+  if (flowType === "greet_and_collect") {
+    if (!conversa.welcomeSentAt) {
+      const ganhou = await prisma.conversation.updateMany({
+        where: { id: conversa.id, welcomeSentAt: null },
+        data: { welcomeSentAt: new Date(), funnelStage: "TRIAGEM_AUTOMATICA" },
+      });
+      if (ganhou.count === 0) {
+        log.info({ conversationId: conversa.id }, "saudação já enviada por outra mensagem simultânea");
+        await marcarProcessado(webhookEventId);
+        return;
+      }
+      await enviar(
+        org.id,
+        conversa.id,
+        msg.chatId,
+        montarSaudacaoColeta({ nomeCliente: primeiroNome(contato.name), nomeEmpresa: nomeLoja }),
+        log,
+      );
+      await marcarProcessado(webhookEventId);
+      return;
+    }
+
+    // A saudação já foi enviada: o que o cliente escreveu agora É o pedido.
+    // Vira o resumo do handoff, para o representante não precisar perguntar
+    // de novo o que já foi dito.
+    await transferirParaHumano(
+      org.id,
+      conversa.id,
+      conversa.protocol,
+      msg.chatId,
+      log,
+      "solicitacao_inicial",
+      msg.body ?? undefined,
+    );
+    await marcarProcessado(webhookEventId);
+    return;
+  }
+
   if (!conversa.welcomeSentAt) {
     // Marca ANTES de enviar, condicionado a ainda estar nulo. Duas mensagens
     // que chegam quase juntas (dois jobs, possivelmente dois workers)
@@ -313,6 +365,7 @@ async function transferirParaHumano(
   chatId: string,
   log: Logger,
   motivo = "pedido_cliente",
+  resumo?: string,
 ): Promise<void> {
   await enviar(organizationId, conversationId, chatId, montarTransferencia(protocolo), log);
 
@@ -328,8 +381,8 @@ async function transferirParaHumano(
 
   await prisma.handoff.upsert({
     where: { conversationId },
-    create: { conversationId, reason: motivo },
-    update: { reason: motivo },
+    create: { conversationId, reason: motivo, ...(resumo ? { summary: resumo } : {}) },
+    update: { reason: motivo, ...(resumo ? { summary: resumo } : {}) },
   });
 
   await prisma.conversationEvent.create({

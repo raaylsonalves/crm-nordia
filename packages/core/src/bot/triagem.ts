@@ -36,6 +36,23 @@ export function montarMenu(params: { nomeCliente: string; nomeLoja: string }): s
   );
 }
 
+/**
+ * Saudação do fluxo "cumprimentar e coletar" — para organizações que não
+ * usam o menu numérico de triagem (ex.: prestadora de serviço, em vez de
+ * loja). Uma mensagem só: dá boas-vindas, pede o contexto do pedido e avisa
+ * que uma pessoa vai continuar a conversa. A resposta do cliente vira o
+ * resumo enviado ao atendente — não há opções para interpretar.
+ */
+export function montarSaudacaoColeta(params: { nomeCliente: string; nomeEmpresa: string }): string {
+  return (
+    `Olá, ${params.nomeCliente}! 👋\n` +
+    `Bem-vindo à ${params.nomeEmpresa}.\n` +
+    `Para agilizar seu atendimento, me conta rapidinho o que você está buscando ` +
+    `ou qual solução gostaria de solicitar.\n` +
+    `Em breve um de nossos representantes continua sua conversa por aqui.`
+  );
+}
+
 export function montarTransferencia(protocolo: string): string {
   return (
     `Perfeito! Já encaminhei sua solicitação para nossa equipe.\n` +

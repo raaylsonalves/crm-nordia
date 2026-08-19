@@ -19,6 +19,7 @@
     "db:migrate": "pnpm --filter @crm/db migrate",
     "db:push": "pnpm --filter @crm/db push",
     "db:seed": "pnpm --filter @crm/db seed",
+    "db:seed:nordia": "pnpm --filter @crm/db seed:nordia",
     "db:reset": "pnpm --filter @crm/db reset",
     "db:studio": "pnpm --filter @crm/db studio",
     "setup": "pnpm install && pnpm infra:up && pnpm db:migrate && pnpm db:seed"
