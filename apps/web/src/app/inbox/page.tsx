@@ -55,6 +55,11 @@ export default function InboxPage() {
   const [confirmando, setConfirmando] = useState<"close" | "return-to-bot" | null>(null);
   const [transferindo, setTransferindo] = useState(false);
   const [imagemAberta, setImagemAberta] = useState<{ src: string; descricao: string } | null>(null);
+  // Abaixo do breakpoint lg, só uma coluna fica visível por vez — a tela é
+  // estreita demais para as três lado a lado (era o que quebrava no celular:
+  // as três colunas continuavam lado a lado e o conteúdo vazava da tela).
+  // Em telas largas as classes `lg:` ignoram este estado e mostram as três.
+  const [painelMobile, setPainelMobile] = useState<"lista" | "conversa" | "cliente">("lista");
   const arquivoRef = useRef<HTMLInputElement>(null);
   const { avisar, marcarTitulo } = useNotificacoes();
   const [enviando, setEnviando] = useState(false);
@@ -260,22 +265,22 @@ export default function InboxPage() {
   return (
     <div className="flex h-screen flex-col">
       {/* Topo */}
-      <header className="flex items-center gap-4 border-b px-5 py-3" style={{ ...borda, ...superficie }}>
-        <span className="text-lg font-bold tracking-[0.15em]">RISE</span>
+      <header className="flex items-center gap-2 border-b px-3 py-3 sm:gap-4 sm:px-5" style={{ ...borda, ...superficie }}>
+        <span className="shrink-0 text-lg font-bold tracking-[0.15em]">NORDIA</span>
         <input
           type="search"
           value={busca}
           onChange={(e) => setBusca(e.target.value)}
-          placeholder="Buscar nome, telefone ou protocolo…"
+          placeholder="Buscar…"
           aria-label="Buscar conversas"
-          className="max-w-md flex-1 rounded-lg border px-3 py-1.5 text-sm outline-none"
+          className="min-w-0 max-w-md flex-1 rounded-lg border px-3 py-1.5 text-sm outline-none"
           style={{ ...borda, background: "var(--fundo)", color: "var(--texto)" }}
         />
-        <div className="ml-auto flex items-center gap-3">
+        <div className="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
           <button onClick={alternarTema} aria-label="Alternar tema" className="rounded-lg border px-2.5 py-1.5 text-sm" style={borda}>
             ◐
           </button>
-          <span className="text-sm" style={{ color: "var(--texto-suave)" }}>
+          <span className="hidden text-sm sm:inline" style={{ color: "var(--texto-suave)" }}>
             {usuario?.nome ?? "…"}
           </span>
           <button onClick={sair} className="text-sm underline" style={{ color: "var(--texto-suave)" }}>
@@ -284,9 +289,12 @@ export default function InboxPage() {
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1">
-        {/* Coluna 1 — lista */}
-        <aside className="flex w-80 shrink-0 flex-col border-r" style={{ ...borda, ...superficie }}>
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        {/* Coluna 1 — lista. No celular, só aparece com painelMobile "lista". */}
+        <aside
+          className={`${painelMobile === "lista" ? "flex" : "hidden"} w-full shrink-0 flex-col border-r lg:flex lg:w-80`}
+          style={{ ...borda, ...superficie }}
+        >
           <div className="flex flex-wrap gap-1.5 border-b p-3" style={borda}>
             {FILTROS.map((f, i) => (
               <button
@@ -325,7 +333,10 @@ export default function InboxPage() {
               conversas.map((c) => (
                 <button
                   key={c.id}
-                  onClick={() => setSelecionada(c.id)}
+                  onClick={() => {
+                    setSelecionada(c.id);
+                    setPainelMobile("conversa");
+                  }}
                   className="w-full border-b px-4 py-3 text-left transition hover:opacity-80"
                   style={{
                     ...borda,
@@ -358,13 +369,20 @@ export default function InboxPage() {
           </div>
         </aside>
 
-        {/* Coluna 2 — conversa */}
-        <section className="flex min-w-0 flex-1 flex-col">
+        {/* Coluna 2 — conversa. No celular, só aparece com painelMobile "conversa". */}
+        <section className={`${painelMobile === "conversa" ? "flex" : "hidden"} min-w-0 flex-1 flex-col lg:flex`}>
           {!detalhe ? (
             <EstadoVazio titulo="Selecione uma conversa" descricao="Escolha um atendimento na lista ao lado para ver o histórico." />
           ) : (
             <>
               <div className="flex items-center gap-3 border-b px-5 py-3" style={{ ...borda, ...superficie }}>
+                <button
+                  onClick={() => setPainelMobile("lista")}
+                  aria-label="Voltar para a lista"
+                  className="shrink-0 rounded-lg px-2 py-1.5 text-lg lg:hidden"
+                >
+                  ←
+                </button>
                 <div className="min-w-0">
                   <p className="truncate font-semibold">{detalhe.contato.nome}</p>
                   <p className="text-xs" style={{ color: "var(--texto-suave)" }}>
@@ -382,6 +400,15 @@ export default function InboxPage() {
                       Assumir
                     </button>
                   )}
+                  <button
+                    onClick={() => setPainelMobile("cliente")}
+                    aria-label="Ver dados do cliente"
+                    title="Ver dados do cliente"
+                    className="shrink-0 rounded-lg border px-2 py-1.5 text-sm lg:hidden"
+                    style={borda}
+                  >
+                    👤
+                  </button>
                 </div>
               </div>
 
@@ -477,9 +504,19 @@ export default function InboxPage() {
           )}
         </section>
 
-        {/* Coluna 3 — cliente */}
+        {/* Coluna 3 — cliente. No celular, só aparece com painelMobile "cliente". */}
         {detalhe && (
-          <aside className="hidden w-72 shrink-0 overflow-y-auto border-l p-5 lg:block" style={{ ...borda, ...superficie }}>
+          <aside
+            className={`${painelMobile === "cliente" ? "block" : "hidden"} w-full shrink-0 overflow-y-auto border-l p-5 lg:block lg:w-72`}
+            style={{ ...borda, ...superficie }}
+          >
+            <button
+              onClick={() => setPainelMobile("conversa")}
+              className="mb-4 flex items-center gap-1.5 text-sm lg:hidden"
+              style={{ color: "var(--texto-suave)" }}
+            >
+              ← Voltar à conversa
+            </button>
             <p className="text-sm font-semibold">{detalhe.contato.nome}</p>
             <p className="text-xs" style={{ color: "var(--texto-suave)" }}>
               {detalhe.contato.telefone ?? "telefone não informado pelo WhatsApp"}
@@ -513,7 +550,10 @@ export default function InboxPage() {
                   {detalhe.anteriores.map((a) => (
                     <button
                       key={a.id}
-                      onClick={() => setSelecionada(a.id)}
+                      onClick={() => {
+                        setSelecionada(a.id);
+                        setPainelMobile("conversa");
+                      }}
                       className="w-full rounded-lg border px-2.5 py-2 text-left text-xs transition hover:opacity-80"
                       style={borda}
                     >

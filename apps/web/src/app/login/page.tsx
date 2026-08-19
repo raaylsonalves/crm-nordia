@@ -30,7 +30,7 @@ export default function LoginPage() {
       <div className="w-full max-w-sm">
         <div className="mb-10 text-center">
           <h1 className="text-3xl font-bold tracking-tight" style={{ letterSpacing: "0.15em" }}>
-            RISE
+            NORDIA
           </h1>
           <p className="mt-2 text-sm" style={{ color: "var(--texto-suave)" }}>
             Central de atendimento

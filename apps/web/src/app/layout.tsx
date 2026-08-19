@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "CRM RISE",
-  description: "Atendimento WhatsApp da RISE",
+  title: "CRM NORDIA",
+  description: "Atendimento WhatsApp da NORDIA Tech",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
