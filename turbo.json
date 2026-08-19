@@ -1,7 +1,29 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "globalDependencies": [".env"],
-  "globalEnv": ["NODE_ENV", "DATABASE_URL", "REDIS_URL"],
+  "globalEnv": [
+    "NODE_ENV",
+    "DATABASE_URL",
+    "REDIS_URL",
+    "UPSTASH_REDIS_REST_URL",
+    "UPSTASH_REDIS_REST_TOKEN",
+    "NEXT_PUBLIC_API_URL",
+    "INTEGRATION_MODE",
+    "WAHA_BASE_URL",
+    "WAHA_API_KEY",
+    "WAHA_SESSION",
+    "WAHA_TIMEOUT_MS",
+    "WAHA_MAX_RETRIES",
+    "WAHA_WEBHOOK_TOKEN",
+    "WAHA_WEBHOOK_HMAC_SECRET",
+    "STORAGE_ENDPOINT",
+    "STORAGE_BUCKET",
+    "STORAGE_ACCESS_KEY",
+    "STORAGE_SECRET_KEY",
+    "STORAGE_REGION",
+    "TRIGGER_SECRET_KEY",
+    "TRIGGER_PROJECT_REF"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
