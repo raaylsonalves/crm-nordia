@@ -91,23 +91,28 @@ async function main() {
     await prisma.queueMember.create({ data: { queueId: fila.id, userId: usuario.id } });
   }
 
-  // Mesma disciplina da RISE: integrações nascem DISABLED, sem credencial
-  // nenhuma. Para receber mensagens de verdade, a NORDIA precisa do próprio
-  // número conectado a uma sessão própria na WAHA (ex.: "nordia-principal")
-  // — não dá para compartilhar a sessão da RISE, cada número é uma
-  // identidade de WhatsApp Business diferente.
+  // A sessão "rise-principal" foi pareada durante o desenvolvimento com o
+  // número +55 85 99133-1364 — que na prática é o número da NORDIA, não da
+  // RISE (decisão de 15/08/2026). Em vez de reparear com outro nome, a
+  // NORDIA passa a ser a dona dessa sessão; a RISE fica em standby
+  // (ver packages/db/prisma/seed.ts). O nome "rise-principal" ficou
+  // desalinhado do que ele representa — renomear exigiria reparear o
+  // WhatsApp de novo, então fica como está até valer a pena o custo.
   for (const provider of [IntegrationProvider.WAHA, IntegrationProvider.AI]) {
     await prisma.integration.create({
       data: {
         organizationId: org.id,
         provider,
-        mode: IntegrationMode.DISABLED,
+        mode: provider === IntegrationProvider.WAHA ? IntegrationMode.LIVE : IntegrationMode.DISABLED,
         config:
           provider === IntegrationProvider.WAHA
-            ? { baseUrl: "http://localhost:3001", session: "nordia-principal" }
+            ? { baseUrl: "http://localhost:3001", session: "rise-principal" }
             : { model: "claude-sonnet-5" },
-        status: "desconectado",
-        statusMessage: "Integração não configurada. Informe as credenciais em Admin → Integrações.",
+        status: provider === IntegrationProvider.WAHA ? "aguardando pareamento" : "desconectado",
+        statusMessage:
+          provider === IntegrationProvider.WAHA
+            ? "Sessão rise-principal (número real da NORDIA) aguardando parear."
+            : "Integração não configurada. Informe as credenciais em Admin → Integrações.",
       },
     });
   }
@@ -117,14 +122,14 @@ Seed concluído — NORDIA Tech
   organização ......... ${org.name} (${org.slug})
   representantes ....... ${usuarios.map((u) => u.name).join(", ")}
   fila ................. ${fila.name}
-  integrações .......... WAHA (sessão nordia-principal) e IA, ambas DISABLED
+  integração WAHA ...... sessão rise-principal · modo LIVE · aguardando pareamento
+  integração IA ........ DISABLED
 
 Acesso de desenvolvimento (senha única: crm@2026)
 ${usuarios.map((u) => `  ${u.name.padEnd(20)} ${u.email}`).join("\n")}
 
-Pendência para testar com WhatsApp real:
-  parear um número próprio da NORDIA na sessão "nordia-principal" da WAHA
-  (a sessão "rise-principal" pertence à RISE e não deve ser reaproveitada).
+A sessão "rise-principal" usa o número real da NORDIA (+55 85 99133-1364).
+Parear em WhatsApp → Aparelhos conectados → Conectar com número de telefone.
 `);
 }
 

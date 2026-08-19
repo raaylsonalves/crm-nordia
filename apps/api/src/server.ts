@@ -5,6 +5,7 @@ import { prisma } from "@crm/db";
 import Fastify from "fastify";
 import { env } from "./env.js";
 import { setOrgIdForLogs, waha } from "./integrations/waha.js";
+import { resolverOrganizacaoPorSessao } from "./org.js";
 import { carregarSessao } from "./plugins/auth.js";
 import { fecharFilas } from "./queues.js";
 import { iniciarBarramento, pararBarramento } from "./realtime/bus.js";
@@ -95,9 +96,13 @@ if (env.NODE_ENV !== "production") {
 // publicado entre o listen() e a assinatura se perderia.
 await iniciarBarramento();
 
-const org = await prisma.organization.findFirst({ where: { slug: "rise" }, select: { id: true } });
+// A organização dona da sessão WAHA configurada — não mais um slug fixo.
+// O adapter de saída é uma única instância presa a WAHA_SESSION; os logs de
+// integração que ele gera precisam ser atribuídos a quem realmente é dono
+// dessa sessão, o que já mudou uma vez (era a RISE, hoje é a NORDIA).
+const org = await resolverOrganizacaoPorSessao(env.WAHA_SESSION);
 if (org) setOrgIdForLogs(org.id);
-else app.log.error("organização 'rise' não encontrada — rode pnpm db:seed");
+else app.log.error(`nenhuma organização está mapeada para a sessão WAHA '${env.WAHA_SESSION}'`);
 
 await app.listen({ port: env.API_PORT, host: "0.0.0.0" });
 app.log.info(`integrações em modo ${env.INTEGRATION_MODE.toUpperCase()}`);

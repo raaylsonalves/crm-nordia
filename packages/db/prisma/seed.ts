@@ -67,36 +67,60 @@ function gerarProtocolo(): string {
 
 const SLUG = "rise";
 
-async function limpar() {
+/**
+ * Limpa só os dados da RISE, nunca o banco inteiro.
+ *
+ * Antes deste ajuste, cada `deleteMany()` aqui era global — sem filtro
+ * nenhum. Funcionava enquanto só existia uma organização; passou a ser uma
+ * bomba-relógio no dia em que a NORDIA foi criada no mesmo banco, porque
+ * `prisma.organization.deleteMany()` sem filtro apaga TODAS as
+ * organizações, não só a que está sendo re-semeada. Rodar `pnpm db:seed`
+ * teria apagado a NORDIA inteira como efeito colateral.
+ *
+ * Toda tabela sem organizationId direto é limpa por relação (ex.: Handoff
+ * não tem organizationId, mas sua conversa tem). A única exceção real é
+ * WebhookEvent, que não guarda organização nenhuma no schema (chega antes
+ * de sabermos de quem é a mensagem) — seu deleteMany continua global. Isso
+ * apaga o histórico de webhooks de todas as organizações ao re-semear a
+ * RISE, mas não toca em contato, conversa ou mensagem de ninguém: é log de
+ * auditoria, não dado de negócio.
+ */
+async function limpar(): Promise<void> {
+  const existente = await prisma.organization.findUnique({ where: { slug: SLUG }, select: { id: true } });
+  if (!existente) return; // primeira vez — nada para limpar.
+  const orgId = existente.id;
+
   // Ordem importa: filhos antes dos pais.
   await prisma.$transaction([
-    prisma.automationRun.deleteMany(),
-    prisma.automation.deleteMany(),
-    prisma.aiInteraction.deleteMany(),
-    prisma.knowledgeChunk.deleteMany(),
-    prisma.knowledgeDocument.deleteMany(),
-    prisma.integrationLog.deleteMany(),
-    prisma.webhookEvent.deleteMany(),
-    prisma.auditLog.deleteMany(),
-    prisma.note.deleteMany(),
-    prisma.handoff.deleteMany(),
-    prisma.conversationEvent.deleteMany(),
-    prisma.message.deleteMany(),
-    prisma.conversation.deleteMany(),
-    prisma.opportunity.deleteMany(),
-    prisma.orderItem.deleteMany(),
-    prisma.order.deleteMany(),
-    prisma.consent.deleteMany(),
-    prisma.contactTag.deleteMany(),
-    prisma.contact.deleteMany(),
-    prisma.tag.deleteMany(),
-    prisma.productVariant.deleteMany(),
-    prisma.product.deleteMany(),
-    prisma.queueMember.deleteMany(),
-    prisma.queue.deleteMany(),
-    prisma.integration.deleteMany(),
-    prisma.user.deleteMany(),
-    prisma.organization.deleteMany(),
+    prisma.automationRun.deleteMany({ where: { automation: { organizationId: orgId } } }),
+    prisma.automation.deleteMany({ where: { organizationId: orgId } }),
+    prisma.aiInteraction.deleteMany({ where: { organizationId: orgId } }),
+    prisma.knowledgeChunk.deleteMany({ where: { document: { organizationId: orgId } } }),
+    prisma.knowledgeDocument.deleteMany({ where: { organizationId: orgId } }),
+    prisma.integrationLog.deleteMany({ where: { organizationId: orgId } }),
+    prisma.webhookEvent.deleteMany(), // global — ver nota acima.
+    prisma.auditLog.deleteMany({ where: { organizationId: orgId } }),
+    prisma.note.deleteMany({
+      where: { OR: [{ contact: { organizationId: orgId } }, { conversation: { organizationId: orgId } }] },
+    }),
+    prisma.handoff.deleteMany({ where: { conversation: { organizationId: orgId } } }),
+    prisma.conversationEvent.deleteMany({ where: { conversation: { organizationId: orgId } } }),
+    prisma.message.deleteMany({ where: { organizationId: orgId } }),
+    prisma.conversation.deleteMany({ where: { organizationId: orgId } }),
+    prisma.opportunity.deleteMany({ where: { organizationId: orgId } }),
+    prisma.orderItem.deleteMany({ where: { order: { organizationId: orgId } } }),
+    prisma.order.deleteMany({ where: { organizationId: orgId } }),
+    prisma.consent.deleteMany({ where: { contact: { organizationId: orgId } } }),
+    prisma.contactTag.deleteMany({ where: { contact: { organizationId: orgId } } }),
+    prisma.contact.deleteMany({ where: { organizationId: orgId } }),
+    prisma.tag.deleteMany({ where: { organizationId: orgId } }),
+    prisma.productVariant.deleteMany({ where: { product: { organizationId: orgId } } }),
+    prisma.product.deleteMany({ where: { organizationId: orgId } }),
+    prisma.queueMember.deleteMany({ where: { queue: { organizationId: orgId } } }),
+    prisma.queue.deleteMany({ where: { organizationId: orgId } }),
+    prisma.integration.deleteMany({ where: { organizationId: orgId } }),
+    prisma.user.deleteMany({ where: { organizationId: orgId } }),
+    prisma.organization.deleteMany({ where: { id: orgId } }),
   ]);
 }
 
@@ -840,6 +864,13 @@ async function main() {
   // DISABLED de propósito: nenhuma credencial no seed, nenhuma simulação de
   // conexão ativa. Configurar em Admin → Integrações.
   // Nuvemshop está fora do escopo por ora — o registro nem é criado.
+  //
+  // A sessão "rise-principal" foi pareada durante o desenvolvimento como
+  // teste, mas o número que ela usa é, na prática, da NORDIA Tech — decisão
+  // tomada em 15/08/2026. A RISE fica em standby, sem sessão real, até ter
+  // um número próprio. "rise-standby" é só um nome que não corresponde a
+  // nenhuma sessão de verdade na WAHA — garante que nenhuma mensagem real
+  // seja roteada para a RISE por engano. Ver packages/db/prisma/seed-nordia.ts.
   for (const provider of [IntegrationProvider.WAHA, IntegrationProvider.AI]) {
     await prisma.integration.create({
       data: {
@@ -848,10 +879,10 @@ async function main() {
         mode: IntegrationMode.DISABLED,
         config:
           provider === IntegrationProvider.WAHA
-            ? { baseUrl: "http://localhost:3001", session: "rise-principal" }
+            ? { baseUrl: "http://localhost:3001", session: "rise-standby" }
             : { model: "claude-sonnet-5", embeddingModel: "text-embedding-3-small" },
-        status: "desconectado",
-        statusMessage: "Integração não configurada. Informe as credenciais em Admin → Integrações.",
+        status: "standby",
+        statusMessage: "Sem número próprio conectado. Aguardando um número dedicado para a RISE.",
       },
     });
   }

@@ -4,15 +4,20 @@ import { Worker } from "bullmq";
 import { env } from "./env.js";
 import { setOrgIdForLogs } from "./integrations/waha.js";
 import { logger } from "./logger.js";
+import { resolverOrganizacaoPorSessao } from "./org.js";
 import { processarAck } from "./processors/ack-update.js";
 import { processarMensagemRecebida } from "./processors/inbound-message.js";
 import { redis } from "./redis.js";
 
 logger.info(`worker iniciando · integrações em modo ${env.INTEGRATION_MODE.toUpperCase()} · concorrência ${env.WORKER_CONCURRENCY}`);
 
-const org = await prisma.organization.findFirst({ where: { slug: "rise" }, select: { id: true } });
+// Mesma ressalva do server.ts da API: o adapter de saída do worker (usado
+// pelo bot) também é uma instância única presa a WAHA_SESSION, e é isso que
+// decide de quem são os logs de integração enquanto não existir um adapter
+// por organização.
+const org = await resolverOrganizacaoPorSessao(env.WAHA_SESSION);
 if (org) setOrgIdForLogs(org.id);
-else logger.error("organização 'rise' não encontrada — rode pnpm db:seed");
+else logger.error({ sessao: env.WAHA_SESSION }, "nenhuma organização está mapeada para esta sessão WAHA");
 
 const inboundWorker = new Worker<InboundMessageJob>(
   QUEUE_NAMES.inboundMessage,
