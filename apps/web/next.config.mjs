@@ -7,6 +7,13 @@ const nextConfig = {
   // resolvê-los como dependência pronta.
   transpilePackages: ["@crm/core", "@crm/db", "@crm/adapters"],
 
+  // O tracing do Next às vezes não pega o binário do Query Engine do
+  // Prisma (arquivo .so.node) por estar fora da árvore que ele varre por
+  // padrão vindo de um pacote do monorepo. Isto força a inclusão.
+  outputFileTracingIncludes: {
+    "/api/**/*": ["../../node_modules/.pnpm/@prisma+client@*/node_modules/.prisma/client/**/*"],
+  },
+
   webpack: (config) => {
     // Nossos pacotes importam arquivos irmãos com extensão ".js" mesmo
     // sendo ".ts" — convenção ESM do Node, que o `tsx` e o `tsc` já sabem

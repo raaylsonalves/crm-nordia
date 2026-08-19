@@ -6,6 +6,11 @@
 generator client {
   provider        = "prisma-client-js"
   previewFeatures = ["postgresqlExtensions"]
+  // "native" cobre dev local (Windows/Mac); rhel-openssl-3.0.x é o runtime
+  // das Lambdas da Vercel — sem ele o Query Engine não é baixado/copiado
+  // pro bundle e o Prisma falha em produção com "could not locate the
+  // Query Engine".
+  binaryTargets   = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {
