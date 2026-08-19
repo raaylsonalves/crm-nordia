@@ -408,12 +408,14 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     // Avisa o cliente que saiu do automático e tem uma pessoa do outro lado.
     // Sem isso, quem estava conversando com o bot não percebe a troca e fica
     // esperando uma resposta que já está a caminho.
-    const contato = await prisma.contact.findUnique({
-      where: { id: conversa.contactId },
-      select: { waChatId: true },
-    });
+    const [contato, organizacao] = await Promise.all([
+      prisma.contact.findUnique({ where: { id: conversa.contactId }, select: { waChatId: true } }),
+      prisma.organization.findUnique({ where: { id: usuario.organizationId }, select: { name: true } }),
+    ]);
     if (contato) {
-      const aviso = `Oi! Aqui é ${primeiroNome(usuario.name)}, da RISE. Assumi seu atendimento e já vou te responder. 😊`;
+      // Nome da organização, não "RISE" fixo — isso mandava "da RISE" para
+      // clientes da NORDIA quando um representante dela assumia.
+      const aviso = `Oi! Aqui é ${primeiroNome(usuario.name)}, da ${organizacao?.name ?? "equipe"}. Assumi seu atendimento e já vou te responder. 😊`;
       try {
         const enviado = await waha.sendText({ chatId: contato.waChatId, text: aviso });
         await prisma.message.create({

@@ -10,6 +10,7 @@ import { VisualizadorImagem } from "@/components/VisualizadorImagem";
 import { useNotificacoes } from "@/lib/notificacoes";
 import {
   API_URL,
+  REALTIME_MODE,
   ApiError,
   api,
   type ConversaDetalhe,
@@ -103,8 +104,21 @@ export default function InboxPage() {
   }, [mensagens]);
 
   // ── Tempo real ─────────────────────────────────────────────────────────
+  // Variante Vercel (sem API dedicada, ver REALTIME_MODE): sem SSE, uma
+  // function serverless não sustenta conexão aberta. Reconsulta a lista a
+  // cada poucos segundos — mais grosseiro, mas robusto nesse ambiente. Não é
+  // o desenho final; é o suficiente para testar o fluxo.
   useEffect(() => {
-    if (!usuario) return;
+    if (!usuario || REALTIME_MODE !== "poll") return;
+    const intervalo = setInterval(() => {
+      void carregarConversas();
+      if (selecionada) void carregarConversa(selecionada);
+    }, 4_000);
+    return () => clearInterval(intervalo);
+  }, [usuario, selecionada, carregarConversas, carregarConversa]);
+
+  useEffect(() => {
+    if (!usuario || REALTIME_MODE !== "sse") return;
     const fonte = new EventSource(`${API_URL}/stream`, { withCredentials: true });
 
     const aoReceber = (evento: MessageEvent) => {

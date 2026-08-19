@@ -2,8 +2,19 @@
  * Cliente da API. Todas as chamadas levam o cookie de sessão (`credentials`).
  * Nenhuma credencial de WAHA, IA ou loja passa por aqui — o navegador só
  * conhece a nossa própria API.
+ *
+ * Duas formas de hospedar, mesmo front:
+ *  - Local/produção "cheia": API separada em Fastify (apps/api), com SSE de
+ *    verdade. NEXT_PUBLIC_API_URL aponta para ela.
+ *  - Vercel (teste): sem NEXT_PUBLIC_API_URL, cai em "/api/v1" — rotas do
+ *    próprio Next.js (apps/web/src/app/api/v1/**), mesma origem. Essa variante
+ *    não tem SSE (function serverless não sustenta conexão longa), então a
+ *    inbox usa polling — ver REALTIME_MODE.
  */
-export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3333/api/v1";
+export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api/v1";
+
+/** "sse" quando há API externa dedicada; "poll" na variante Vercel. */
+export const REALTIME_MODE: "sse" | "poll" = process.env.NEXT_PUBLIC_API_URL ? "sse" : "poll";
 
 export class ApiError extends Error {
   constructor(

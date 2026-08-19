@@ -1,0 +1,21 @@
+{
+  "name": "@crm/trigger",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npx trigger.dev@latest dev",
+    "deploy": "npx trigger.dev@latest deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@crm/adapters": "workspace:*",
+    "@crm/core": "workspace:*",
+    "@crm/db": "workspace:*",
+    "@trigger.dev/sdk": "^3.3.17"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "typescript": "^5.6.3"
+  }
+}
